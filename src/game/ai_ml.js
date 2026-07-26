@@ -122,6 +122,9 @@ function tokenize(src) {
 // ---- Parser: expr -> tiny AST (Let, App, Var, Lit, ListLit) -----------
 
 function isKeyword(tok, word) {
+  // `val` is Standard ML's word for a value binding. Accepted as a synonym for
+  // `let` so that a line copied out of a manual binds rather than complains.
+  if (word === 'let' && tok && tok.t === 'IDENT' && ['val', 'fun'].includes(tok.v.toLowerCase())) return true;
   return tok.t === 'IDENT' && tok.v.toLowerCase() === word;
 }
 
@@ -147,12 +150,27 @@ function parse(toks) {
   // `let f x y = e` sugars to `let f = fn x => fn y => e`.
   function wrapParams(params, value) {
     let v = value;
-    for (let k = params.length - 1; k >= 0; k--) v = { type: 'Lam', param: params[k], body: v };
+    for (let k = params.length - 1; k >= 0; k--) {
+      const par = params[k];
+      if (typeof par === 'string') { v = { type: 'Lam', param: par, body: v }; continue; }
+      // A pattern parameter becomes a lambda over a fresh name that immediately
+      // takes its argument apart. Same machinery as case, no new runtime.
+      const tmp = `__arg${k}`;
+      v = { type: 'Lam', param: tmp, body: { type: 'Case', subject: { type: 'Var', name: tmp }, arms: [{ pat: par.pat, body: v }] } };
+    }
     return v;
   }
+  // A parameter may be a pattern, not only a name: `let dist (x, y) = x + y`.
+  // Harper (1993, s.2.4) treats a plain name as the simplest case of a pattern
+  // rather than a separate thing, and so does this: a name comes back as a
+  // string, anything else as a parsed pattern, and wrapParams tells them apart.
   function letParams() {
     const params = [];
-    while (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) params.push(eat('IDENT').v);
+    for (;;) {
+      if (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) { params.push(eat('IDENT').v); continue; }
+      if (peek().t === 'LP' || peek().t === 'LB') { params.push({ pat: parsePatternAtom() }); continue; }
+      break;
+    }
     return params;
   }
 
@@ -175,6 +193,20 @@ function parse(toks) {
     if (isKeyword(peek(), 'if')) return parseIf();
     if (isKeyword(peek(), 'let')) {
       p++;
+      // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
+      // Harper introduces this as "the following generalization of a value
+      // binding" (1993, p.16), before case, because it is the simpler idea:
+      // write down the shape and the parts get names.
+      if (peek().t === 'LP' || peek().t === 'LB') {
+        const pat = parsePatternAtom();
+        eat('EQ');
+        const value = parseExpr();
+        if (isKeyword(peek(), 'in')) {
+          p++;
+          return { type: 'LetPat', pat, value, body: parseExpr() };
+        }
+        return { type: 'TopLetPat', pat, value };
+      }
       const nameTok = eat('IDENT');
       const params = letParams();
       eat('EQ');
@@ -362,9 +394,9 @@ function parse(toks) {
     let left = parseApp();
     // `mod` is a word rather than a symbol, as it is in ML, so it arrives as an
     // IDENT and is matched here by value. Same precedence as * and /.
-    const isMod = (t) => t.t === 'IDENT' && t.v.toLowerCase() === 'mod';
+    const isMod = (t) => t.t === 'IDENT' && ['mod', 'div'].includes(t.v.toLowerCase());
     while (peek().t === 'STAR' || peek().t === 'SLASH' || peek().t === 'CARET' || isMod(peek())) {
-      const op = isMod(peek()) ? (p++, 'MOD') : toks[p++].t;
+      const op = isMod(peek()) ? (peek().v.toLowerCase() === 'div' ? (p++, 'DIV') : (p++, 'MOD')) : toks[p++].t;
       left = { type: 'Bin', op, left, right: parseApp() };
     }
     return left;
@@ -374,7 +406,7 @@ function parse(toks) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
-    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'case', 'of', 'datatype'].includes(tok.v.toLowerCase())) return false;
+    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun'].includes(tok.v.toLowerCase())) return false;
     return tok.t === 'NUM' || tok.t === 'STR' || tok.t === 'IDENT' || tok.t === 'LP' || tok.t === 'LB';
   }
 
@@ -459,6 +491,20 @@ function parse(toks) {
     }
     if (isKeyword(peek(), 'let')) {
       p++;
+      // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
+      // Harper introduces this as "the following generalization of a value
+      // binding" (1993, p.16), before case, because it is the simpler idea:
+      // write down the shape and the parts get names.
+      if (peek().t === 'LP' || peek().t === 'LB') {
+        const pat = parsePatternAtom();
+        eat('EQ');
+        const value = parseExpr();
+        if (isKeyword(peek(), 'in')) {
+          p++;
+          return { type: 'LetPat', pat, value, body: parseExpr() };
+        }
+        return { type: 'TopLetPat', pat, value };
+      }
       const nameTok = eat('IDENT');
       const params = letParams();
       eat('EQ');
@@ -1112,6 +1158,11 @@ function applyBinOp(op, l, r) {
     case 'MOD':
       if (b === 0) throw new RonmlError('mod by zero');
       return { tag: 'num', v: ((a % b) + b) % b };
+    // `div` is whole division and `/` is not, which is the distinction SML
+    // makes between int and real and this build cannot make in its types.
+    case 'DIV':
+      if (b === 0) throw new RonmlError('div by zero');
+      return { tag: 'num', v: Math.floor(a / b) };
     case 'LT': return { tag: 'bool', v: a < b };
     case 'GT': return { tag: 'bool', v: a > b };
     case 'LE': return { tag: 'bool', v: a <= b };
@@ -1236,6 +1287,23 @@ function evalNode(node, env, ctx, builtins) {
       env[node.name.toLowerCase()] = v;
       return { tag: 'binding', name: node.name, value: v };
     }
+    case 'LetPat': {
+      const v = evalNode(node.value, env, ctx, builtins);
+      const binds = matchPattern(node.pat, v, ctx);
+      if (!binds) throw new RonmlError(`this binding does not fit ${describeValue(v)}`);
+      const env2 = Object.create(env);
+      for (const k of Object.keys(binds)) env2[k.toLowerCase()] = binds[k];
+      return evalNode(node.body, env2, ctx, builtins);
+    }
+    case 'TopLetPat': {
+      const v = evalNode(node.value, env, ctx, builtins);
+      const binds = matchPattern(node.pat, v, ctx);
+      if (!binds) throw new RonmlError(`this binding does not fit ${describeValue(v)}`);
+      const names = Object.keys(binds);
+      for (const k of names) env[k.toLowerCase()] = binds[k];
+      // Echo every name it bound, the way the top level echoes one.
+      return { tag: 'bindings', names, values: names.map((k) => binds[k]) };
+    }
     case 'App': {
       const fn = evalNode(node.fn, env, ctx, builtins);
       const arg = evalNode(node.arg, env, ctx, builtins);
@@ -1313,6 +1381,7 @@ function describeValue(v) {
     case 'confn': return `${v.name} (needs ${v.arity - v.args.length} more)`;
     case 'datatype': return `the type ${v.name}`;
     case 'binding': return `the binding ${v.name}`;
+    case 'bindings': return `${v.names.length} bindings`;
     case 'fn': return `${v.name} (needs ${v.builtin.arity - v.args.length} more arg${v.builtin.arity - v.args.length === 1 ? '' : 's'})`;
     default: return 'that';
   }
@@ -1330,10 +1399,18 @@ function formatValue(v) {
     case 'file': return v.name;
     case 'list': return '[' + v.items.map(formatValue).join(', ') + ']';
     case 'tuple': return '(' + v.items.map(formatValue).join(', ') + ')';
-    case 'con': return v.args && v.args.length ? `${v.name} ${v.args.map(formatValue).join(' ')}` : v.name;
+    // A constructor's arguments are parenthesised when they are themselves
+    // constructors carrying something, or `Plus (Chr "a") (Chr "b")` prints as
+    // `Plus Chr a Chr b`, which reads as four arguments and is not what it is.
+    case 'con': {
+      if (!v.args || !v.args.length) return v.name;
+      const arg = (a) => (a && a.tag === 'con' && a.args && a.args.length ? `(${formatValue(a)})` : formatValue(a));
+      return `${v.name} ${v.args.map(arg).join(' ')}`;
+    }
     case 'confn': return `<${v.name}>`;
     case 'datatype': return `datatype ${v.name} = ${v.cons.join(' | ')}`;
     case 'binding': return `val ${v.name} = ${formatValue(v.value)}`;
+    case 'bindings': return v.names.map((n, i) => `val ${n} = ${formatValue(v.values[i])}`).join('\n');
     case 'closure': return '<fn>';
     case 'fn': return `<${describeValue(v)}>`;
     default: return String(v);
