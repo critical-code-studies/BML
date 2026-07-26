@@ -2294,9 +2294,8 @@ export function aimlVersion() {
   ].join('\n');
 }
 
-// The survey. Written as three columns of fact rather than a sales pitch: what
-// is here, what is not, and what is here but different. A player deciding
-// whether their program will run should be able to decide it from this page.
+// The survey: what is here, what is not, and what is here but spelled
+// differently. Enough to tell whether a given program will run.
 export function aimlFull() {
   const L = [];
   const sec = (t) => { L.push('', t, '='.repeat(t.length)); };
@@ -2369,9 +2368,6 @@ export function aimlFull() {
   row('this laptop', 'the language alone, and the type checker.');
   row('inside a machine', 'its own program, 2,000 steps, four times a second.');
 
-  L.push('');
-  L.push('Measured against the 32 example files of the manual this language');
-  L.push('descends from. Where it departs, the departure is named above.');
   return L.join('\n');
 }
 

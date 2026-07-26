@@ -10,11 +10,9 @@
 // how the manuals display everything. There was no barrier. There was no
 // implementation.
 //
-// WHAT IT IS FOR HERE. Not to refuse programs. A machine in a ruin whose owner
-// is trying to remember how a language works should say what it worked out and
-// let you decide. So inference REPORTS: it names the type of what you bound, and
-// it names a clash when it finds one. Whether a clash stops the line is the
-// caller's decision, not this module's.
+// WHAT IT IS FOR HERE. It reports rather than refuses: it names the type of
+// what you bound, and names a clash when it finds one. Whether a clash stops
+// the line is the caller's decision, not this module's.
 //
 // Pure. No world, no DOM, no console.
 
@@ -22,7 +20,7 @@
 //
 // A type is either a variable, which may or may not be bound to something yet,
 // or a constructor applied to arguments. Lists, tuples, functions and records
-// are all constructors; that is the whole point of writing it this way.
+// are all constructors, which is why the representation is shaped this way.
 
 let NEXT = 0;
 
@@ -77,8 +75,8 @@ export function unify(a, b) {
 // ---- schemes and environments ----------------------------------------------
 //
 // A scheme is a type with some of its variables marked as "fresh at every use",
-// which is what makes one `map` usable on numbers and on strings. Generalising
-// only the variables NOT free in the environment is the whole subtlety.
+// which is what makes one `map` usable on numbers and on strings. Only the
+// variables not free in the environment may be generalised.
 
 const scheme = (vars, type) => ({ vars, type });
 const mono = (type) => scheme([], type);
@@ -119,8 +117,7 @@ function instantiate(s) {
 // ---- printing --------------------------------------------------------------
 //
 // SML's own notation, because the point is that a reader who knows ML can read
-// it. `num` rather than `int`, because this language has one number type and
-// pretending otherwise would be the same lie as an unchecked annotation.
+// it. `num` rather than `int`: this language has one number type.
 
 export function show(t, names = new Map()) {
   const p = prune(t);
@@ -154,8 +151,8 @@ export function recordOf(labels, types) {
 //
 // Only the language's own verbs are typed. The station verbs (scan, hack, the
 // machine senses) are left polymorphic on purpose: they reach into a world this
-// module knows nothing about, and inventing types for them would be a guess
-// dressed as a fact. A fresh variable says "anything", which is true.
+// module knows nothing about, so a type for them would be a guess. A fresh
+// variable says "anything", which is accurate.
 function baseEnv() {
   const a = fresh();
   const b = fresh();
@@ -378,8 +375,8 @@ export function infer(node, env, cons) {
 }
 
 // Turn a written type into one of ours. A name this build has no opinion about
-// (a datatype you declared, a type abbreviation) becomes a variable: unknown,
-// not wrong, which is the honest reading of a name it has never been told about.
+// (a datatype you declared, a type abbreviation) becomes a variable: unknown
+// rather than wrong.
 const ANNOT = { int: NUM, real: NUM, num: NUM, word: NUM, string: STR, str: STR, char: STR, bool: BOOL, unit: UNIT };
 
 export function fromAnnotation(a, vars) {
