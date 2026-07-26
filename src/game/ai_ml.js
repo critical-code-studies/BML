@@ -137,8 +137,7 @@ function tokenize(src) {
       i = j;
       continue;
     }
-    // `~` is SML's unary minus. It was never lexed, which is the whole reason
-    // it was missing.
+    // `~` is SML's unary minus. It was missing because it was never lexed.
     if (c === '~' && /[0-9(]/.test(src[i + 1] || '')) { toks.push({ t: 'NEG' }); i++; continue; }
     if (/[A-Za-z_]/.test(c) || (c === "'" && /[A-Za-z]/.test(src[i + 1] || ''))) {
       let j = i + 1;
@@ -2332,8 +2331,7 @@ export function parseLine(source) {
 
 // What the type checker makes of a line, as a string to print beside the
 // answer. Never throws and never refuses: inference here REPORTS. A machine in
-// a ruin should say what it worked out and let you decide, which is also why a
-// name it has never seen is "anything" rather than an error.
+// a name it has never seen is "anything" rather than an error.
 export function typeReport(source, ctx) {
   if (!ctx || !ctx.types) return null;
   try {
@@ -2414,10 +2412,7 @@ export function aimlFull() {
   row('inference', 'Hindley-Milner. Runs on this laptop only.');
   row('', 'map : (\'a -> \'b) -> \'a list -> \'b list');
   row('annotations', 'val x : int = 5. Checked, not decoration.');
-  row('what it does', 'REPORTS. It names a clash and runs the line');
-  L.push('                            anyway. It is a report, not a gate.');
-  row('why', 'a machine in a ruin should say what it worked');
-  L.push('                            out and let you decide.');
+  row('on a clash', 'names it, then runs the line anyway.');
 
   sec('NOT ON THIS BUILD');
   row('functors', 'parameterised structures. Not fitted.');
