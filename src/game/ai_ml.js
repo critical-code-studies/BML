@@ -60,6 +60,7 @@ function tokenize(src) {
     }
     if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }  // cons, as in ML
     if (c === '|' && src[i + 1] === '>') { toks.push({ t: 'PIPE' }); i += 2; continue; }
+    if (c === '|') { toks.push({ t: 'BAR' }); i++; continue; }   // separates datatype constructors and case arms
     // Comparison operators (two-char forms first). Equality is `==` (bare `=` is
     // reserved for `let`), inequality `!=` or ML's `<>`.
     if (c === '<' && src[i + 1] === '=') { toks.push({ t: 'LE' }); i += 2; continue; }
@@ -102,7 +103,7 @@ function tokenize(src) {
       i = j;
       continue;
     }
-    if (/[A-Za-z]/.test(c)) {
+    if (/[A-Za-z_]/.test(c)) {
       let j = i + 1;
       // `.` is allowed inside an identifier so filenames lex as one token
       // (factory_id.ml, readme.md) — evalNode tags anything ending .ml/.md a file.
@@ -169,6 +170,7 @@ function parse(toks) {
   }
 
   function parseExpr1() {
+    if (isKeyword(peek(), 'case')) return parseCase();
     if (isKeyword(peek(), 'fn')) return parseLambda();
     if (isKeyword(peek(), 'if')) return parseIf();
     if (isKeyword(peek(), 'let')) {
@@ -183,6 +185,109 @@ function parse(toks) {
       return { type: 'Let', name: nameTok.v, value, body };
     }
     return parsePipe();
+  }
+
+  // `case e of p => e | p => e` — the eliminator. Every compound value in this
+  // language is built by a constructor of some kind (cons for lists, a tuple's
+  // comma, a datatype's own names), and Harper's point (1993, s.2.4) is that
+  // the way to take such a value apart is to write down the shape it was built
+  // with and let the machine fill in the parts. That is all a pattern is: an
+  // expression whose variables are about to be bound rather than looked up.
+  function parseCase() {
+    p++; // 'case'
+    const subject = parseExpr1();
+    if (!isKeyword(peek(), 'of')) throw new RonmlError("expected 'of' after case — try: case l of nil => 0 | x :: r => 1");
+    p++;
+    const arms = [];
+    for (;;) {
+      const pat = parsePattern();
+      if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after a pattern — try: nil => 0");
+      p++;
+      arms.push({ pat, body: parseExpr1() });
+      if (peek().t !== 'BAR') break;
+      p++;
+    }
+    return { type: 'Case', subject, arms };
+  }
+
+  // Patterns. Cons binds loosest so `x :: y :: rest` reads to the right, the
+  // same way the expression does.
+  function parsePattern() {
+    const head = parsePatternAtom();
+    if (peek().t !== 'CONS') return head;
+    p++;
+    return { p: 'cons', head, tail: parsePattern() };
+  }
+
+  // One pattern in argument position: an atom, but a bare name stays a bare
+  // name rather than swallowing what follows it.
+  function parsePatternArg() {
+    const tok = peek();
+    if (tok.t === 'IDENT') {
+      const lower = tok.v.toLowerCase();
+      if (!['of', 'case', 'let', 'in', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod'].includes(lower)) {
+        p++;
+        if (tok.v === '_') return { p: 'wild' };
+        if (lower === 'nil') return { p: 'nil' };
+        if (lower === 'true') return { p: 'bool', v: true };
+        if (lower === 'false') return { p: 'bool', v: false };
+        return { p: 'name', name: tok.v, args: [] };
+      }
+    }
+    return parsePatternAtom();
+  }
+
+  function parsePatternAtom() {
+    const tok = peek();
+    if (tok.t === 'NUM') { p++; return { p: 'num', v: tok.v }; }
+    if (tok.t === 'STR') { p++; return { p: 'str', v: tok.v }; }
+    if (tok.t === 'MINUS') { p++; const n = eat('NUM'); return { p: 'num', v: -n.v }; }
+    if (tok.t === 'LB') {
+      p++;
+      const items = [];
+      if (peek().t !== 'RB') {
+        items.push(parsePattern());
+        while (peek().t === 'COMMA') { p++; items.push(parsePattern()); }
+      }
+      eat('RB');
+      return items.reduceRight((tail, head) => ({ p: 'cons', head, tail }), { p: 'nil' });
+    }
+    if (tok.t === 'LP') {
+      p++;
+      const first = parsePattern();
+      if (peek().t === 'COMMA') {
+        const items = [first];
+        while (peek().t === 'COMMA') { p++; items.push(parsePattern()); }
+        eat('RP');
+        return { p: 'tuple', items };
+      }
+      eat('RP');
+      return first;
+    }
+    if (tok.t === 'IDENT') {
+      p++;
+      const v = tok.v;
+      const lower = v.toLowerCase();
+      if (v === '_') return { p: 'wild' };
+      if (lower === 'nil') return { p: 'nil' };
+      if (lower === 'true') return { p: 'bool', v: true };
+      if (lower === 'false') return { p: 'bool', v: false };
+      // A constructor pattern may take arguments: `Circle r`, `Rect w h`. A
+      // bare name with none is ambiguous between a nullary constructor and a
+      // variable, and is resolved at match time against the declared set,
+      // because with no types there is nothing else to resolve it against.
+      // Arguments are parsed WITHOUT letting each one collect arguments of its
+      // own, or `Rect w h` would read as `Rect (w h)` and the constructor would
+      // see one argument where it declared two. Nest with parentheses when a
+      // sub-pattern really is applied: `Node (Leaf x) r`.
+      const args = [];
+      while (peek().t === 'IDENT' || peek().t === 'NUM' || peek().t === 'LP' || peek().t === 'LB') {
+        if (peek().t === 'IDENT' && ['of', 'case', 'let', 'in', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod'].includes(peek().v.toLowerCase())) break;
+        args.push(parsePatternArg());
+      }
+      return { p: 'name', name: v, args };
+    }
+    throw new RonmlError(`'${tok.v ?? tok.t}' cannot start a pattern`);
   }
 
   // `if c then a else b` — the conditional. The condition is a full expression
@@ -269,7 +374,7 @@ function parse(toks) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
-    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod'].includes(tok.v.toLowerCase())) return false;
+    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'case', 'of', 'datatype'].includes(tok.v.toLowerCase())) return false;
     return tok.t === 'NUM' || tok.t === 'STR' || tok.t === 'IDENT' || tok.t === 'LP' || tok.t === 'LB';
   }
 
@@ -293,6 +398,15 @@ function parse(toks) {
     if (tok.t === 'LP') {
       p++;
       const e = parseExpr();
+      // (e) is just e; (e1, e2, ...) is a tuple. Harper introduces tuples
+      // before lists (1993, s.2.2.6) because they are the simpler compound:
+      // fixed width, and the parts may differ in kind.
+      if (peek().t === 'COMMA') {
+        const items = [e];
+        while (peek().t === 'COMMA') { p++; items.push(parseExpr()); }
+        eat('RP');
+        return { type: 'Tuple', items };
+      }
       eat('RP');
       return e;
     }
@@ -314,6 +428,35 @@ function parse(toks) {
   // `in` (parseExpr enforces that). So the fortress program can be typed as
   // separate lines that follow one another (copy aikey / let k = hack OB / ...).
   function parseTop() {
+    // `datatype colour = Red | Blue | Circle of num`
+    //
+    // The `of ...` part is a TYPE, and this build does not check types, so it
+    // is read for one thing only: how many arguments the constructor takes,
+    // counted by the * between components. Harper (1993, s.2.7) declares the
+    // type and its value constructors in one binding; so does this, minus the
+    // checking. The Restrictions page says as much rather than implying more.
+    if (isKeyword(peek(), 'datatype')) {
+      p++;
+      const nameTok = eat('IDENT');
+      eat('EQ');
+      const cons = [];
+      for (;;) {
+        const c = eat('IDENT');
+        let arity = 0;
+        if (isKeyword(peek(), 'of')) {
+          p++;
+          arity = 1;
+          // Skip the type expression, counting * separators. A type here is a
+          // run of identifiers; nothing else may appear.
+          eat('IDENT');
+          while (peek().t === 'STAR') { p++; eat('IDENT'); arity++; }
+        }
+        cons.push({ name: c.v, arity });
+        if (peek().t !== 'BAR') break;
+        p++;
+      }
+      return { type: 'Datatype', name: nameTok.v, cons };
+    }
     if (isKeyword(peek(), 'let')) {
       p++;
       const nameTok = eat('IDENT');
@@ -914,6 +1057,16 @@ function applyValue(fnVal, argVal) {
     env2[fnVal.param.toLowerCase()] = argVal;
     return evalNode(fnVal.body, env2, fnVal.ctx, fnVal.builtins);
   }
+  // A datatype constructor that takes arguments behaves like a function until
+  // it has them all, at which point it stops being one and becomes a value.
+  // This is Harper's point about constructors: they build, and building is the
+  // only thing they do.
+  if (fnVal && fnVal.tag === 'confn') {
+    const args = [...fnVal.args, argVal];
+    return args.length >= fnVal.arity
+      ? { tag: 'con', name: fnVal.name, args }
+      : { tag: 'confn', name: fnVal.name, arity: fnVal.arity, args };
+  }
   if (!fnVal || fnVal.tag !== 'fn') {
     throw new RonmlError(`${describeValue(fnVal)} isn't something you can apply an argument to`);
   }
@@ -1002,6 +1155,39 @@ function evalNode(node, env, ctx, builtins) {
       return evalNode(c.v ? node.then : node.else, env, ctx, builtins);
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+
+    // Declaring a datatype puts its constructors where names are looked up.
+    // A nullary one IS a value; one that takes arguments is a function that
+    // collects them and then is a value. Nothing is checked, because there is
+    // nothing here to check with.
+    case 'Datatype': {
+      const store = (ctx && ctx.session) || {};
+      const reg = (store.__cons = store.__cons || {});
+      for (const c of node.cons) {
+        reg[c.name] = { name: c.name, arity: c.arity, of: node.name };
+        store[c.name.toLowerCase()] = c.arity === 0
+          ? { tag: 'con', name: c.name, args: [] }
+          : { tag: 'confn', name: c.name, arity: c.arity, args: [] };
+      }
+      return { tag: 'datatype', name: node.name, cons: node.cons.map((c) => c.name) };
+    }
+
+    // The eliminator. Arms are tried in order and the first that matches wins,
+    // which is what lets you put the base case first and read the thing like
+    // the definition it is.
+    case 'Case': {
+      const v = evalNode(node.subject, env, ctx, builtins);
+      for (const arm of node.arms) {
+        const binds = matchPattern(arm.pat, v, ctx);
+        if (binds) {
+          const scope = Object.create(env);
+          for (const k of Object.keys(binds)) scope[k.toLowerCase()] = binds[k];
+          return evalNode(arm.body, scope, ctx, builtins);
+        }
+      }
+      throw new RonmlError(`no case matches ${describeValue(v)} — add an arm, or _ => … to catch the rest`);
+    }
     case 'Var': {
       const lower = node.name.toLowerCase();
       // Walk the scope chain (envs nest via Object.create for let/lambda scopes),
@@ -1060,6 +1246,58 @@ function evalNode(node, env, ctx, builtins) {
   }
 }
 
+
+// Match a value against a pattern. Returns a map of bindings, or null if the
+// pattern does not fit. Harper (1993, p.16): "the variables in a pattern are
+// not references to previously-bound variables, but rather variables that are
+// about to be bound by pattern-matching." That sentence is the whole function.
+function matchPattern(pat, v, ctx) {
+  const cons = (ctx && ctx.session && ctx.session.__cons) || {};
+  switch (pat.p) {
+    case 'wild': return {};
+    case 'num': return v && v.tag === 'num' && v.v === pat.v ? {} : null;
+    case 'str': return v && v.tag === 'str' && v.v === pat.v ? {} : null;
+    case 'bool': return v && v.tag === 'bool' && v.v === pat.v ? {} : null;
+    case 'nil': return v && v.tag === 'list' && v.items.length === 0 ? {} : null;
+    case 'cons': {
+      if (!v || v.tag !== 'list' || !v.items.length) return null;
+      const h = matchPattern(pat.head, v.items[0], ctx);
+      if (!h) return null;
+      const t = matchPattern(pat.tail, { tag: 'list', items: v.items.slice(1) }, ctx);
+      return t ? { ...h, ...t } : null;
+    }
+    case 'tuple': {
+      if (!v || v.tag !== 'tuple' || v.items.length !== pat.items.length) return null;
+      const out = {};
+      for (let i = 0; i < pat.items.length; i++) {
+        const m = matchPattern(pat.items[i], v.items[i], ctx);
+        if (!m) return null;
+        Object.assign(out, m);
+      }
+      return out;
+    }
+    case 'name': {
+      // A declared constructor matches by name and arity; anything else is a
+      // variable, and a variable matches anything.
+      if (cons[pat.name]) {
+        if (!v || (v.tag !== 'con' && v.tag !== 'confn') || v.name !== pat.name) return null;
+        const got = v.args || [];
+        if (pat.args.length !== got.length) return null;
+        const out = {};
+        for (let i = 0; i < pat.args.length; i++) {
+          const m = matchPattern(pat.args[i], got[i], ctx);
+          if (!m) return null;
+          Object.assign(out, m);
+        }
+        return out;
+      }
+      if (pat.args.length) return null;   // `Foo x` where Foo is not a constructor
+      return { [pat.name]: v };
+    }
+    default: return null;
+  }
+}
+
 function describeValue(v) {
   if (!v) return 'nothing';
   switch (v.tag) {
@@ -1070,6 +1308,10 @@ function describeValue(v) {
     case 'key': return v.kind === 'aikey' ? 'the AI key' : 'a key';
     case 'file': return `the file ${v.name}`;
     case 'list': return 'a list';
+    case 'tuple': return `a tuple of ${v.items.length}`;
+    case 'con': return `${v.name}`;
+    case 'confn': return `${v.name} (needs ${v.arity - v.args.length} more)`;
+    case 'datatype': return `the type ${v.name}`;
     case 'binding': return `the binding ${v.name}`;
     case 'fn': return `${v.name} (needs ${v.builtin.arity - v.args.length} more arg${v.builtin.arity - v.args.length === 1 ? '' : 's'})`;
     default: return 'that';
@@ -1087,6 +1329,10 @@ function formatValue(v) {
     case 'key': return v.kind === 'aikey' ? (v.enc === false ? 'AIKEY:open' : 'AIKEY:sealed') : `KEY:${v.id}`;
     case 'file': return v.name;
     case 'list': return '[' + v.items.map(formatValue).join(', ') + ']';
+    case 'tuple': return '(' + v.items.map(formatValue).join(', ') + ')';
+    case 'con': return v.args && v.args.length ? `${v.name} ${v.args.map(formatValue).join(' ')}` : v.name;
+    case 'confn': return `<${v.name}>`;
+    case 'datatype': return `datatype ${v.name} = ${v.cons.join(' | ')}`;
     case 'binding': return `val ${v.name} = ${formatValue(v.value)}`;
     case 'closure': return '<fn>';
     case 'fn': return `<${describeValue(v)}>`;
@@ -1378,7 +1624,9 @@ export function runRonml(source, ctx) {
         && !(ctx && ctx.station === 'robot')) {
       const lower = ast.name.toLowerCase();
       const bound = Object.prototype.hasOwnProperty.call((ctx && ctx.session) || {}, lower);
-      if (!bound && !builtins[lower] && lower !== 'true' && lower !== 'false' && lower !== 'nil') {
+      const declared = (ctx && ctx.session && ctx.session.__cons) || {};
+      const isCon = Object.prototype.hasOwnProperty.call(declared, ast.name);
+      if (!bound && !isCon && !builtins[lower] && lower !== 'true' && lower !== 'false' && lower !== 'nil') {
         if (ctx && ctx.station && ALL_VERBS.has(lower)) {
           return { ok: false, text: `ERR: ${notHereMessage(ast.name, ctx.station)}` };
         }
