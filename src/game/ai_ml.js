@@ -70,10 +70,13 @@ function tokenize(src) {
     }
     if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }
     if (c === ':' && src[i + 1] === '>') { toks.push({ t: 'ASCRIBE' }); i += 2; continue; }   // opaque ascription
+    if (c === ':' && src[i + 1] === '=') { toks.push({ t: 'ASSIGN' }); i += 2; continue; }    // assignment, before the bare colon
     if (c === ':') { toks.push({ t: 'COLON' }); i++; continue; }  // cons, as in ML
     if (c === '|' && src[i + 1] === '>') { toks.push({ t: 'PIPE' }); i += 2; continue; }
     if (c === '|') { toks.push({ t: 'BAR' }); i++; continue; }
     if (c === '@') { toks.push({ t: 'AT' }); i++; continue; }    // list append
+    if (c === '!' && src[i + 1] === '=') { toks.push({ t: 'NE' }); i += 2; continue; }   // older spelling of <>
+    if (c === '!') { toks.push({ t: 'BANG' }); i++; continue; }
     if (c === '{') { toks.push({ t: 'LC' }); i++; continue; }    // record
     if (c === '}') { toks.push({ t: 'RC' }); i++; continue; }
     // #"a" is a character; #label and #1 are selectors. The quote tells them
@@ -166,6 +169,7 @@ function isKeyword(tok, word) {
 
 function parse(toks) {
   let p = 0;
+  let inBlock = 0;      // >0 while inside local/struct: `in` and `end` are the block's
   const peek = () => toks[p];
   const eat = (t) => {
     if (toks[p].t !== t) throw new RonmlError(`expected ${t.toLowerCase()}, got '${toks[p].v ?? toks[p].t}'`);
@@ -299,7 +303,7 @@ function parse(toks) {
   // `e handle Pat => e | Pat => e` — the same arm shape as case, because that
   // is what a handler is: a match, tried against whatever was raised.
   function parseHandle() {
-    let body = parseExpr1();
+    let body = parseAssign();
     while (isKeyword(peek(), 'handle')) {
       p++;
       const arms = [];
@@ -314,6 +318,15 @@ function parse(toks) {
       body = { type: 'Handle', body, arms };
     }
     return body;
+  }
+
+  // `r := e` — the only thing in the language that changes something that
+  // already exists.
+  function parseAssign() {
+    const left = parseExpr1();
+    if (peek().t !== 'ASSIGN') return left;
+    p++;
+    return { type: 'Assign', target: left, value: parseExpr1() };
   }
 
   function parseExpr1() {
@@ -651,6 +664,7 @@ function parse(toks) {
     if (tok.t === 'NUM') { p++; return { type: 'Lit', value: tok.v, real: !!tok.real }; }
     if (tok.t === 'CHAR') { p++; return { type: 'CharLit', value: tok.v }; }
     if (tok.t === 'NEG') { p++; const a = parseAtom(); return { type: 'Neg', arg: a }; }
+    if (tok.t === 'BANG') { p++; return { type: 'Deref', arg: parseAtom() }; }
     if (tok.t === 'STR') { p++; return { type: 'StrLit', value: tok.v }; }
     if (tok.t === 'IDENT') { p++; return { type: 'Var', name: tok.v }; }
     if (tok.t === 'LP') {
@@ -824,16 +838,61 @@ function parse(toks) {
       return { type: 'SigDecl', name: nameTok.v, names };
     }
     // `structure Name [:> SIG] = struct ... end`
+    // `local d1 in d2 end` — d1 is in scope for d2 and nowhere after. The
+    // declarations version of let.
+    if (isKeyword(peek(), 'local')) {
+      p++;
+      const hidden = [];
+      inBlock++;
+      while (!isKeyword(peek(), 'in') && peek().t !== 'EOF') hidden.push(parseTop());
+      if (isKeyword(peek(), 'in')) p++;
+      const shown = [];
+      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') shown.push(parseTop());
+      inBlock--;
+      if (isKeyword(peek(), 'end')) p++;
+      return { type: 'Local', hidden, shown };
+    }
+    // `functor F (X : SIG) = struct ... end` — a structure with a structure for
+    // an argument. The body is kept unevaluated and run per application, which
+    // is the whole difference from a plain structure.
+    if (isKeyword(peek(), 'functor')) {
+      p++;
+      const nameTok = eat('IDENT');
+      eat('LP');
+      const param = eat('IDENT').v;
+      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); }
+      eat('RP');
+      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); }
+      eat('EQ');
+      if (!isKeyword(peek(), 'struct')) throw new RonmlError("expected 'struct' after a functor's =");
+      p++;
+      const decls = [];
+      inBlock++;
+      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') decls.push(parseTop());
+      inBlock--;
+      if (isKeyword(peek(), 'end')) p++;
+      return { type: 'FunctorDecl', name: nameTok.v, param, decls };
+    }
     if (isKeyword(peek(), 'structure')) {
       p++;
       const nameTok = eat('IDENT');
       let ascribe = null;
       if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; ascribe = eat('IDENT').v; }
       eat('EQ');
+      // `structure M = F (A)` applies a functor rather than opening a struct.
+      if (peek().t === 'IDENT' && !isKeyword(peek(), 'struct')) {
+        const fn = eat('IDENT').v;
+        let arg = null;
+        if (peek().t === 'LP') { p++; arg = eat('IDENT').v; eat('RP'); }
+        else if (peek().t === 'IDENT') arg = eat('IDENT').v;
+        return { type: 'StructApply', name: nameTok.v, functor: fn, arg, ascribe };
+      }
       if (!isKeyword(peek(), 'struct')) throw new RonmlError("expected 'struct' after a structure name");
       p++;
       const decls = [];
+      inBlock++;
       while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') decls.push(parseTop());
+      inBlock--;
       if (isKeyword(peek(), 'end')) p++;
       return { type: 'StructDecl', name: nameTok.v, ascribe, decls };
     }
@@ -917,7 +976,7 @@ function parse(toks) {
         while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
         return !!toks[q] && toks[q].t === 'EQ';
       };
-      while (inAhead() && ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let'))) {
+      while (!inBlock && inAhead() && ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let'))) {
         p++;
         const n2 = eat('IDENT');
         const p2 = letParams();
@@ -925,7 +984,7 @@ function parse(toks) {
         const b2 = parseExpr();
         extra.push({ name: n2.v, value: clausalRest(n2.v, p2, b2) || wrapParams(p2, b2) });
       }
-      if (isKeyword(peek(), 'in')) {
+      if (!inBlock && isKeyword(peek(), 'in')) {
         p++;
         let body = parseExpr();
         if (isKeyword(peek(), 'end')) p++;
@@ -1164,6 +1223,8 @@ function makeBuiltins(station) {
     min: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('min needs two numbers'); return { tag: a.tag, v: Math.min(a.v, b.v) }; } },
     max: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('max needs two numbers'); return { tag: a.tag, v: Math.max(a.v, b.v) }; } },
     size: { arity: 1, fn: ([x]) => { if (x && x.tag === 'str') return { tag: 'int', v: x.v.length }; if (x && x.tag === 'list') return { tag: 'int', v: x.items.length }; throw new RonmlError(`${describeValue(x)} has no size`); } },
+    // A cell whose contents can be replaced. The only mutable thing here.
+    ref: { arity: 1, fn: ([v]) => ({ tag: 'ref', cell: { v } }) },
     hd: {
       arity: 1,
       fn: ([l]) => {
@@ -1503,7 +1564,7 @@ const HERMES_VERBS = ['read', 'archive', 'records', 'drive', 'backup', 'restore'
 // the language rather than perform it under fire. A tower verb typed here is not a
 // typo, it is a machine that isn't listening: evalNode says so and points at a tower.
 const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size',
-  'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode'];
+  'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode', 'ref'];
 // A MACHINE'S OWN STATION. Its program runs here: senses in, an intent out, and
 // nothing else within reach — no network, no files, no console verbs. That is
 // not a restriction bolted on, it is what a unit actually has.
@@ -1687,6 +1748,17 @@ function evalNode(node, env, ctx, builtins) {
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Unit': return { tag: 'unit' };
+    case 'Deref': {
+      const r = evalNode(node.arg, env, ctx, builtins);
+      if (!r || r.tag !== 'ref') throw new RonmlError(`${describeValue(r)} is not a ref`);
+      return r.cell.v;
+    }
+    case 'Assign': {
+      const r = evalNode(node.target, env, ctx, builtins);
+      if (!r || r.tag !== 'ref') throw new RonmlError(`${describeValue(r)} is not a ref`);
+      r.cell.v = evalNode(node.value, env, ctx, builtins);
+      return { tag: 'unit' };
+    }
     case 'Annot': return evalNode(node.expr, env, ctx, builtins);
     case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Record': {
@@ -1736,6 +1808,52 @@ function evalNode(node, env, ctx, builtins) {
         }
         throw e;                 // not ours: let it keep going up
       }
+    }
+
+    // A structure's declarations run in a scope of their own and are then
+    // published. Pulled out because local, functor and structure all do it.
+    case 'Local': {
+      const store = (ctx && ctx.session) || {};
+      const inner = Object.create(env);
+      for (const d of node.hidden) evalNode(d, inner, { ...ctx, session: inner }, builtins);
+      const names = [];
+      for (const d of node.shown) {
+        evalNode(d, inner, { ...ctx, session: inner }, builtins);
+        if (d.name) { store[d.name.toLowerCase()] = inner[d.name.toLowerCase()]; names.push(d.name); }
+      }
+      return { tag: 'struct', name: 'local', names };
+    }
+
+    case 'FunctorDecl': {
+      const store = (ctx && ctx.session) || {};
+      (store.__functors = store.__functors || {})[node.name] = { param: node.param, decls: node.decls };
+      return { tag: 'functor', name: node.name, param: node.param };
+    }
+
+    case 'StructApply': {
+      const store = (ctx && ctx.session) || {};
+      const f = (store.__functors || {})[node.functor];
+      if (!f) throw new RonmlError(`${node.functor} is not a functor`);
+      const inner = Object.create(env);
+      // The argument's names are visible inside the body both bare and under
+      // the parameter's name, so `X.size` and `size` both find it.
+      const prefix = `${String(node.arg || '').toLowerCase()}.`;
+      for (const k of Object.keys(store)) {
+        if (!k.startsWith(prefix)) continue;
+        const bare = k.slice(prefix.length);
+        inner[bare] = store[k];
+        inner[`${f.param.toLowerCase()}.${bare}`] = store[k];
+      }
+      for (const d of f.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
+      const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;
+      const published = [];
+      for (const k of Object.keys(inner)) {
+        if (k.startsWith('__') || k.includes('.')) continue;
+        if (allowed && !allowed.some((n) => n.toLowerCase() === k)) continue;
+        store[`${node.name.toLowerCase()}.${k}`] = inner[k];
+        published.push(k);
+      }
+      return { tag: 'struct', name: node.name, names: published };
     }
 
     case 'SigDecl': {
@@ -1993,6 +2111,7 @@ function describeValue(v) {
     case 'con': return `${v.name}`;
     case 'confn': return `${v.name} (needs ${v.arity - v.args.length} more)`;
     case 'datatype': return `the type ${v.name}`;
+    case 'functor': return `the functor ${v.name}`;
     case 'binding': return `the binding ${v.name}`;
     case 'bindings': return `${v.names.length} bindings`;
     case 'fn': return `${v.name} (needs ${v.builtin.arity - v.args.length} more arg${v.builtin.arity - v.args.length === 1 ? '' : 's'})`;
@@ -2019,6 +2138,7 @@ function formatValue(v) {
     // A constructor's arguments are parenthesised when they are themselves
     // constructors carrying something, or `Plus (Chr "a") (Chr "b")` prints as
     // `Plus Chr a Chr b`, which reads as four arguments and is not what it is.
+    case 'ref': return `ref ${formatValue(v.cell.v)}`;
     case 'con': {
       if (!v.args || !v.args.length) return v.name;
       const arg = (a) => (a && a.tag === 'con' && a.args && a.args.length ? `(${formatValue(a)})` : formatValue(a));
@@ -2030,6 +2150,7 @@ function formatValue(v) {
     case 'exndecl': return `exception ${v.name}`;
     case 'sig': return `signature ${v.name} = sig ${v.names.join(' ')} end`;
     case 'struct': return `structure ${v.name} : ${v.names.length} name(s)`;
+    case 'functor': return `functor ${v.name} (${v.param})`;
     case 'binding': return `val ${v.name} = ${formatValue(v.value)}`;
     case 'bindings': return v.names.map((n, i) => `val ${n} = ${formatValue(v.values[i])}`).join('\n');
     case 'closure': return '<fn>';
@@ -2304,15 +2425,16 @@ export function decide(program, sense, opts = {}) {
 // Pure, ordered most specific first, and returns null when nothing is
 // recognised so the parser's own message stands.
 const NOT_FITTED = [
-  // Kept short on purpose, and pruned whenever the build grows: a diagnosis
-  // that fires on something now supported masks the real error, which is what
-  // it did the first time modules landed and it went on saying there were none.
-  [/^\s*(functor)\b/, 'no functors on this build. Structures and signatures are here; parameterised ones are not.'],
-  [/^\s*(local|abstype)\b/, 'local is not fitted. Use let ... in ... end.'],
+  // A test walks this list and asserts every pattern here still FAILS to parse.
+  // That is the only thing that has stopped it going stale: it went on refusing
+  // modules, exceptions, chars, local and refs after each of them shipped, six
+  // times, and every time it fired before the parser and hid the real error.
   [/^\s*infix\w*\b|\bop\b/, 'no infix declarations on this build.'],
-  [/\bref\b|:=/, 'no mutable references on this build. Nothing here can be assigned to; carry the changing value through the recursion instead.'],
-  [/\b(String|List|Int|Real|Char|Array|Vector|IO|TextIO|Option)\./, 'no standard library on this machine. What there is: hd, tl, length, abs, sqrt, min, max, size.'],
+  [/\b(String|List|Int|Real|Char|Array|Vector|IO|TextIO|Option)\./, 'that library is not on this machine. ml -full lists what is.'],
 ];
+
+// The samples the test uses, one per rule above, in the same order.
+export const NOT_FITTED_SAMPLES = ['infix 8 OR', 'String.explode s'];
 
 export function diagnose(src) {
   for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;
@@ -2332,6 +2454,77 @@ export function parseLine(source) {
 // What the type checker makes of a line, as a string to print beside the
 // answer. Never throws and never refuses: inference here REPORTS. A machine in
 // a name it has never seen is "anything" rather than an error.
+// THE LIBRARY, written in the language it is for.
+//
+// It is loaded as source rather than built as JavaScript builtins, so `List.map`
+// is the same map a player would write and can be read with the same eyes. The
+// structures are the ones the manuals name, minus everything this build has no
+// way to do.
+export const PRELUDE = [
+  "datatype 'a option = NONE | SOME of 'a",
+  '',
+  'structure List = struct',
+  '  fun null nil = true | null _ = false',
+  '  fun map f nil = nil | map f (h :: t) = f h :: map f t',
+  '  fun filter p nil = nil',
+  '    | filter p (h :: t) = if p h then h :: filter p t else filter p t',
+  '  fun foldl f b nil = b | foldl f b (h :: t) = foldl f (f h b) t',
+  '  fun foldr f b nil = b | foldr f b (h :: t) = f h (foldr f b t)',
+  '  fun rev l = foldl (fn h => fn a => h :: a) nil l',
+  '  fun exists p nil = false | exists p (h :: t) = p h orelse exists p t',
+  '  fun all p nil = true | all p (h :: t) = p h andalso all p t',
+  '  fun nth (h :: t, n) = if n == 0 then h else nth (t, n - 1)',
+  '  fun take (l, n) = if n == 0 then nil else hd l :: take (tl l, n - 1)',
+  '  fun drop (l, n) = if n == 0 then l else drop (tl l, n - 1)',
+  '  fun concat nil = nil | concat (h :: t) = h @ concat t',
+  '  fun tabulate (n, f) = if n == 0 then nil else tabulate (n - 1, f) @ [f (n - 1)]',
+  'end',
+  '',
+  'structure Char = struct',
+  '  fun isDigit c = ord c >= 48 andalso ord c <= 57',
+  '  fun isUpper c = ord c >= 65 andalso ord c <= 90',
+  '  fun isLower c = ord c >= 97 andalso ord c <= 122',
+  '  fun isAlpha c = isUpper c orelse isLower c',
+  '  fun isSpace c = ord c == 32 orelse ord c == 9 orelse ord c == 10',
+  '  fun toUpper c = if isLower c then chr (ord c - 32) else c',
+  '  fun toLower c = if isUpper c then chr (ord c + 32) else c',
+  'end',
+  '',
+  'structure String = struct',
+  '  fun size s = length (explode s)',
+  '  fun sub (s, n) = List.nth (explode s, n)',
+  '  fun map f s = implode (List.map f (explode s))',
+  '  fun rev s = implode (List.rev (explode s))',
+  '  fun concat nil = "" | concat (h :: t) = h ^ concat t',
+  '  fun isPrefix (p, s) = List.take (explode s, size p) == explode p',
+  'end',
+  '',
+  'structure Int = struct',
+  '  fun abs n = if n < 0 then 0 - n else n',
+  '  fun min (a, b) = if a < b then a else b',
+  '  fun max (a, b) = if a > b then a else b',
+  '  fun toString n = "" ^ n',
+  'end',
+  '',
+  'structure Option = struct',
+  '  fun isSome NONE = false | isSome (SOME _) = true',
+  '  fun valOf (SOME x) = x',
+  '  fun getOpt (NONE, d) = d | getOpt (SOME x, _) = x',
+  '  fun map f NONE = NONE | map f (SOME x) = SOME (f x)',
+  'end',
+].join('\n');
+
+// Load it into a session. Cheap enough to do on the first line typed, and
+// skipped afterwards.
+export function loadPrelude(ctx) {
+  const sess = (ctx && ctx.session) || {};
+  if (sess.__prelude) return;
+  sess.__prelude = true;
+  for (const line of joinProgramLines(PRELUDE)) {
+    try { runRonml(line, ctx); } catch { /* a prelude line that fails is a bug, not a player error */ }
+  }
+}
+
 export function typeReport(source, ctx) {
   if (!ctx || !ctx.types) return null;
   try {
@@ -2351,7 +2544,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.1';
+export const AIML_VERSION = '1.2';
 export const AIML_NAME = 'AI-ML';
 
 export function aimlVersion() {
@@ -2384,6 +2577,7 @@ export function aimlFull() {
   row('tuple', '(1, "a"). Fixed width, mixed kinds.');
   row('record', '{ a = 1, b = 2 }. #a selects. #1 works on a tuple.');
   row('list', 'nil, ::, [1,2,3], @ joins. hd tl length.');
+  row('ref', 'ref 0, !r reads, r := v writes. The only mutable thing.');
 
   sec('BINDING AND FUNCTIONS');
   row('let / val / fun', 'three words, one thing.');
@@ -2407,6 +2601,8 @@ export function aimlFull() {
   row('exception / raise', 'exception Fail; raise Fail');
   row('handle', 'e handle Fail => e, with full pattern arms.');
   row('type', 'type board = int * int. An abbreviation.');
+  row('local ... in ... end', 'declarations in scope for the block only.');
+  row('functor F (X) = ...', 'a structure taking a structure. F (A) applies it.');
 
   sec('TYPES');
   row('inference', 'Hindley-Milner. Runs on this laptop only.');
@@ -2414,13 +2610,22 @@ export function aimlFull() {
   row('annotations', 'val x : int = 5. Checked, not decoration.');
   row('on a clash', 'names it, then runs the line anyway.');
 
+  sec('THE LIBRARY');
+  row('List', 'map filter foldl foldr rev exists all nth take');
+  L.push('                            drop concat tabulate null');
+  row('String', 'size sub map rev concat isPrefix');
+  row('Char', 'isDigit isAlpha isUpper isLower isSpace toUpper');
+  L.push('                            toLower');
+  row('Int', 'abs min max toString');
+  row('Option', "datatype 'a option, isSome valOf getOpt map");
+  row('bare verbs', 'hd tl length abs sqrt min max size real floor');
+  L.push('                            ord chr str explode implode ref echo');
+  L.push('');
+  L.push('  It is written in AI-ML, not underneath it. `ml -src List` prints it.');
+
   sec('NOT ON THIS BUILD');
-  row('functors', 'parameterised structures. Not fitted.');
-  row('references', 'no ref, no :=. Nothing can be assigned to.');
-  row('standard library', 'abs sqrt min max size real floor ord chr str');
-  L.push('                            explode implode, and the list verbs. No more.');
-  row('infix declarations', 'no infix, no op.');
-  row('local', 'use let ... in ... end.');
+  row('infix declarations', 'no infix, no op. The one real gap left.');
+  row('the rest of the library', 'no Array, Vector, IO, Real beyond sqrt.');
 
   sec('WRITTEN DIFFERENTLY');
   row('==  and  =', 'both are equality. A binding eats its = first.');

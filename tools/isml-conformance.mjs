@@ -50,36 +50,19 @@ function decls(src) {
 // and the one Harper's own Restrictions note predicts.
 function translate(d) {
   let s = d;
-  // Pruned as the language grew. Modules, exceptions and type annotations were
-  // skipped here until v1.252 added them; leaving them in the skip list would
-  // have hidden the gain entirely, which is the third time this instrument has
-  // been the thing that was out of date.
+  // PRUNE THIS WHENEVER THE LANGUAGE GROWS. It has been out of date after every
+  // single addition so far: it went on skipping modules and exceptions after
+  // v1.252 added them, and went on rewriting chars and `~` after v1.255 did.
+  // Each time the score under-reported and the gain was invisible.
   if (/^(functor|infix|open|abstype|local)\b/.test(s)) return null;
   if (/\bref\b|:=/.test(s)) return null;                             // mutable cells
   if (/\b(String|List|Int|Real|Array|Vector|IO|TextIO)\./.test(s)) return null;
 
-
-  s = s.replace(/#"(.)"/g, '"$1"');                                  // char -> 1-char string
-
-  s = s.replace(/~(\d)/g, '(0 - $1)');                               // SML negation
-  // Drop type annotations. The lookarounds matter: without them this eats the
-  // second colon of `h::t` and every list pattern in the corpus turns to `h:`.
-  // Type annotations are parsed now, so they are left alone. The stripper that
-  // removed them is gone with them, and its lookaround bug with it.
-
-
-  s = s.replace(/^fun\s+/, 'let ').replace(/^val\s+/, 'let ');
-
+  // Nothing else is rewritten. #"a" is a char here now, ~n is unary minus,
+  // annotations are checked, andalso/orelse are spelled as they are in ML, and
+  // `fun` and `val` are accepted words. The console is asked what it makes of
+  // the line as written.
   s = s.replace(/\s*\n\s*/g, ' ').replace(/\s+/g, ' ').trim();
-  // SML spells equality `=`; this dialect spells it `==` because a single `=`
-  // binds. Each CLAUSE has its own defining `=`, so convert per clause, after
-  // the first one. Converting globally turned every second clause's defining
-  // `=` into `==` and reported six files as failures that were fine.
-  s = s.split(/\s\|\s/).map((clause) => {
-    const eq = clause.indexOf('=');
-    if (eq < 0) return clause;
-    return clause.slice(0, eq + 1) + clause.slice(eq + 1).replace(/(?<![=<>])=(?![=>])/g, '==');
-  }).join(' | ');
   if (/\b(=)\s*$/.test(s)) return null;
   return s;
 }
