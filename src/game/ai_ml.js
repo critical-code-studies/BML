@@ -1925,6 +1925,57 @@ export function decide(program, sense, opts = {}) {
 }
 
 
+// WHAT THIS BUILD DOES NOT HAVE, said in words.
+//
+// A file of Standard ML pasted in here will fail, and it should; the useful
+// question is whether it fails in a way that tells you why. "unexpected
+// character ':'" is a lexer complaining about the third token of a signature
+// block, and it names neither the construct nor the reason. The console's
+// stated job is to teach rather than gatekeep, and that has to hold when the
+// answer is no.
+//
+// Pure, ordered most specific first, and returns null when nothing is
+// recognised so the parser's own message stands.
+const NOT_FITTED = [
+  [/^\s*(signature|structure|functor|sig|struct)\b/, 'no module system on this build. There are no signatures, structures or functors: put the definitions at the top level. See the Restrictions page.'],
+  [/^\s*(exception)\b|\braise\b|\bhandle\b/, 'no exceptions on this build. An error has to be part of the value you return — a datatype with a failure case does the job.'],
+  [/\bref\b|:=/, 'no mutable references on this build. Nothing here can be assigned to; carry the changing value through the recursion instead.'],
+  [/^\s*(local|abstype)\b/, 'local is not fitted. Use let ... in ... end.'],
+  [/^\s*infix\w*\b|\bop\b/, 'no infix declarations on this build.'],
+  [/\b(String|List|Int|Real|Char|Array|Vector|IO|TextIO|Option)\./, 'no standard library on this machine. What there is: hd, tl, length, abs, sqrt, min, max, size.'],
+  [/#"/, 'no character type. Use a one-letter string.'],
+  [/\bandalso\b/, 'write and, not andalso.'],
+  [/\borelse\b/, 'write or, not orelse.'],
+  [/~\d/, 'no unary minus. Write (0 - n).'],
+  [/^\s*(val|fun)\b[^=]*:\s*[A-Za-z]/, 'no types on this build, so no type annotations. Drop the : and what follows it.'],
+  [/:\s*[A-Za-z_][\w. *>()-]*\s*(->|\*|=|,|\))/, 'that looks like a type annotation, and nothing here is typed. Drop it.'],
+];
+
+export function diagnose(src) {
+  for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;
+  return null;
+}
+
+// Split a program file into the logical lines the parser expects, KEEPING the
+// physical line each one started on, so an error can say where. See
+// joinProgramLines for the joining rules; this is the same function with the
+// numbers left in.
+export function joinProgram(text) {
+  const out = [];
+  const lines = String(text).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    let line = raw.replace(/\(\*.*?\*\)/g, '').replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    if (/^>/.test(line)) continue;
+    line = line.replace(/^(\s*)-\s+(?=[A-Za-z(\[])/, '$1');
+    const continues = /^\s/.test(raw) || /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(line);
+    if (continues && out.length) out[out.length - 1].text += ` ${line.trim()}`;
+    else out.push({ text: line.trim(), line: i + 1 });
+  }
+  return out;
+}
+
 // Join the physical lines of a program file into the logical ones the parser
 // expects. A line continues the previous one when it is indented or opens with
 // an operator that cannot start a declaration — which is how ML is written, and
@@ -1932,30 +1983,7 @@ export function decide(program, sense, opts = {}) {
 // could only hold one-liners, and every multi-line function in the demos and in
 // Harper's corpus failed on its second line.
 export function joinProgramLines(text) {
-  const out = [];
-  for (const raw of String(text).split('\n')) {
-    let line = raw.replace(/\(\*.*?\*\)/g, '').replace(/\s+$/, '');
-    if (!line.trim()) { continue; }
-    // A pasted TRANSCRIPT, not a program. Every example in the documentation
-    // and in the manuals this language descends from is printed the way a
-    // session looks: the line you type, then the answer marked with >. Copying
-    // an example out of the manual is the whole point of putting it there, so
-    // the answers have to be skipped rather than parsed.
-    //
-    // Only an UNINDENTED > counts, which keeps this consistent with the rule
-    // one line below: indentation means continuation. So a transcript answer
-    // at the left margin is dropped, and `  > 2` under `let big = 3` still
-    // joins. The cost is that a transcript copied WITH its surrounding block
-    // indent is not recognised; strip the indent and it runs.
-    if (/^>/.test(line)) continue;
-    // And the other half of the same convention: SML transcripts mark the
-    // lines you type with a leading `- `.
-    line = line.replace(/^(\s*)-\s+(?=[A-Za-z(\[])/, '$1');
-    const continues = /^\s/.test(raw) || /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(line);
-    if (continues && out.length) out[out.length - 1] += ` ${line.trim()}`;
-    else out.push(line.trim());
-  }
-  return out;
+  return joinProgram(text).map((l) => l.text);
 }
 
 export function runRonml(source, ctx) {
@@ -2012,6 +2040,11 @@ export function runRonml(source, ctx) {
     }
     return { ok: true, text: combineOutput(out, result) };
   } catch (e) {
+    // If the line is a piece of Standard ML this build does not have, say
+    // which piece. The parser's own message names the character it choked
+    // on, which for a signature block is a colon, and that helps nobody.
+    const why = diagnose(source);
+    if (why) return { ok: false, text: `ERR: ${why}` };
     if (e instanceof RonmlError) return { ok: false, text: `ERR: ${e.message}` };
     return { ok: false, text: `ERR: ${e.message || 'malformed command'}` };
   }
