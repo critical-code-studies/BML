@@ -23,6 +23,8 @@
 //   {tag:'node', id}   {tag:'key', id}   {tag:'num', v}
 //   {tag:'list', items}  {tag:'unit'}   {tag:'fn', name, builtin, args}
 
+import { typeOf, remember } from './types.js';
+
 export class RonmlError extends Error {}
 
 // The current run's print buffer. `echo` pushes into it as it evaluates and the
@@ -40,6 +42,12 @@ let OUT = null;
 // not an error message — it is a FAULT in that machine, and it should read that
 // way in play.
 export class RonmlFuelError extends RonmlError {}
+
+// A raised exception in flight. Not a RonmlError: an uncaught one is reported
+// as one, but on the way up it is a value being carried, not a failure.
+export class RonmlRaise extends Error {
+  constructor(value) { super('uncaught exception'); this.value = value; }
+}
 const CONSOLE_FUEL = 200000;
 let STEPS = 0;
 let FUEL = CONSOLE_FUEL;
@@ -58,7 +66,9 @@ function tokenize(src) {
       i = end < 0 ? n : end + 2;
       continue;
     }
-    if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }  // cons, as in ML
+    if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }
+    if (c === ':' && src[i + 1] === '>') { toks.push({ t: 'ASCRIBE' }); i += 2; continue; }   // opaque ascription
+    if (c === ':') { toks.push({ t: 'COLON' }); i++; continue; }  // cons, as in ML
     if (c === '|' && src[i + 1] === '>') { toks.push({ t: 'PIPE' }); i += 2; continue; }
     if (c === '|') { toks.push({ t: 'BAR' }); i++; continue; }
     if (c === '@') { toks.push({ t: 'AT' }); i++; continue; }    // list append
@@ -246,16 +256,37 @@ function parse(toks) {
   // throws away its value, then evaluates e2 and returns that. It threads through
   // everything below via parseExpr1. A trailing `;` (before `)` or end) is tolerated.
   function parseExpr() {
-    let left = parseExpr1();
+    let left = parseHandle();
     while (peek().t === 'SEMI') {
       p++;
       if (peek().t === 'RP' || peek().t === 'EOF' || peek().t === 'RB') break; // trailing ; is fine
-      left = { type: 'Seq', left, right: parseExpr1() };
+      left = { type: 'Seq', left, right: parseHandle() };
     }
     return left;
   }
 
+  // `e handle Pat => e | Pat => e` — the same arm shape as case, because that
+  // is what a handler is: a match, tried against whatever was raised.
+  function parseHandle() {
+    let body = parseExpr1();
+    while (isKeyword(peek(), 'handle')) {
+      p++;
+      const arms = [];
+      for (;;) {
+        const pat = parsePattern();
+        if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after a handler pattern");
+        p++;
+        arms.push({ pat, body: parseExpr1() });
+        if (peek().t !== 'BAR') break;
+        p++;
+      }
+      body = { type: 'Handle', body, arms };
+    }
+    return body;
+  }
+
   function parseExpr1() {
+    if (isKeyword(peek(), 'raise')) { p++; return { type: 'Raise', arg: parseExpr1() }; }
     if (isKeyword(peek(), 'case')) return parseCase();
     if (isKeyword(peek(), 'fn')) return parseLambda();
     if (isKeyword(peek(), 'if')) return parseIf();
@@ -406,6 +437,7 @@ function parse(toks) {
     }
     if (tok.t === 'LP') {
       p++;
+      if (peek().t === 'RP') { p++; return { p: 'unit' }; }
       const first = parsePattern();
       if (peek().t === 'COMMA') {
         const items = [first];
@@ -490,9 +522,10 @@ function parse(toks) {
     // `and` is both boolean conjunction and the separator between simultaneous
     // bindings. Take it as boolean only when what follows is not a binding, or
     // `let a = 1 and b = 2 in …` swallows the second name and then trips on =.
-    while (peek().t === 'IDENT' && (peek().v.toLowerCase() === 'or'
-      || (peek().v.toLowerCase() === 'and' && !andIsBinding()))) {
-      const op = toks[p++].v.toLowerCase();
+    const BOOLW = { and: 'and', andalso: 'and', or: 'or', orelse: 'or' };
+    while (peek().t === 'IDENT' && BOOLW[peek().v.toLowerCase()]
+      && !(peek().v.toLowerCase() === 'and' && andIsBinding())) {
+      const op = BOOLW[toks[p++].v.toLowerCase()];
       left = { type: 'Bool', op, left, right: parseCompare() };
     }
     return left;
@@ -503,9 +536,12 @@ function parse(toks) {
   // `scan |> nearest` still parses as a pipe of two applications.
   function parseCompare() {
     let left = parseCons();
-    while (['LT', 'GT', 'LE', 'GE', 'EQEQ', 'NE'].includes(peek().t)) {
-      const op = toks[p++].t;
-      left = { type: 'Bin', op, left, right: parseAdd() };
+    // EQ reaching here is equality, not a binding: parseTop and parseExpr1 have
+    // already eaten the `=` of any declaration before handing the value over.
+
+    while (['LT', 'GT', 'LE', 'GE', 'EQEQ', 'NE', 'EQ'].includes(peek().t)) {
+      const op = toks[p++].t === 'EQ' ? 'EQEQ' : toks[p - 1].t;
+      left = { type: 'Bin', op, left, right: parseCons() };
     }
     return left;
   }
@@ -548,7 +584,8 @@ function parse(toks) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
-    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end'].includes(tok.v.toLowerCase())) return false;
+    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'andalso', 'orelse', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end',
+      'structure', 'signature', 'sig', 'struct', 'exception', 'raise', 'handle', 'type'].includes(tok.v.toLowerCase())) return false;
     return tok.t === 'NUM' || tok.t === 'STR' || tok.t === 'IDENT' || tok.t === 'LP' || tok.t === 'LB' || tok.t === 'LC' || tok.t === 'HASH';
   }
 
@@ -571,6 +608,7 @@ function parse(toks) {
     if (tok.t === 'IDENT') { p++; return { type: 'Var', name: tok.v }; }
     if (tok.t === 'LP') {
       p++;
+      if (peek().t === 'RP') { p++; return { type: 'Unit' }; }
       const e = parseExpr();
       // (e) is just e; (e1, e2, ...) is a tuple. Harper introduces tuples
       // before lists (1993, s.2.2.6) because they are the simpler compound:
@@ -624,6 +662,26 @@ function parse(toks) {
   // binding — the ML top-level. Nested lets inside an expression still require
   // `in` (parseExpr enforces that). So the fortress program can be typed as
   // separate lines that follow one another (copy aikey / let k = hack OB / ...).
+  // A type expression: read for its shape and thrown away, since inference
+  // works structurally. Returns the number of *-separated components, which is
+  // the one fact a constructor declaration needs from it.
+  function skipTypeExpr() {
+    let parts = 1;
+    let depth = 0;
+    for (;;) {
+      const t = peek();
+      if (t.t === 'EOF') break;
+      if (t.t === 'LP') { depth++; p++; continue; }
+      if (t.t === 'RP') { if (!depth) break; depth--; p++; continue; }
+      if (t.t === 'STAR' && !depth) { parts++; p++; continue; }
+      if (t.t === 'STAR' || t.t === 'ARROW' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
+      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in'].includes(t.v.toLowerCase())) { p++; continue; }
+      if (t.t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') { p += 2; continue; }
+      break;
+    }
+    return parts;
+  }
+
   function parseTop() {
     // `datatype colour = Red | Blue | Circle of num`
     //
@@ -632,6 +690,66 @@ function parse(toks) {
     // counted by the * between components. Harper (1993, s.2.7) declares the
     // type and its value constructors in one binding; so does this, minus the
     // checking. The Restrictions page says as much rather than implying more.
+    // `type board = int * int * ...` — an abbreviation. It names a type and
+    // introduces no values, so it is read and recorded and nothing else
+    // happens. Inference works structurally and does not need the name.
+    if (isKeyword(peek(), 'type')) {
+      p++;
+      while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
+      const nameTok = eat('IDENT');
+      eat('EQ');
+      skipTypeExpr();
+      return { type: 'TypeAbbrev', name: nameTok.v };
+    }
+    // `exception Fail` / `exception Bad of str`. An exception is a constructor
+    // like any other; what makes it an exception is `raise`.
+    if (isKeyword(peek(), 'exception')) {
+      p++;
+      const nameTok = eat('IDENT');
+      let arity = 0;
+      if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(); }
+      return { type: 'ExnDecl', name: nameTok.v, arity };
+    }
+    // `signature NAME = sig ... end` — the names a structure agrees to show.
+    // Without a checker this cannot verify the TYPES, and does not pretend to;
+    // what it does is real all the same: it records which names are public, and
+    // `:>` hides the rest, which is what a signature is for.
+    if (isKeyword(peek(), 'signature')) {
+      p++;
+      const nameTok = eat('IDENT');
+      eat('EQ');
+      if (!isKeyword(peek(), 'sig')) throw new RonmlError("expected 'sig' after a signature name");
+      p++;
+      const names = [];
+      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') {
+        if (isKeyword(peek(), 'val') || isKeyword(peek(), 'fun')) {
+          p++;
+          names.push(eat('IDENT').v);
+          if (peek().t === 'COLON') { p++; skipTypeExpr(); }
+        } else if (isKeyword(peek(), 'type') || isKeyword(peek(), 'datatype')) {
+          p++;
+          while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
+          eat('IDENT');
+          if (peek().t === 'EQ') { p++; skipTypeExpr(); }
+        } else p++;
+      }
+      if (isKeyword(peek(), 'end')) p++;
+      return { type: 'SigDecl', name: nameTok.v, names };
+    }
+    // `structure Name [:> SIG] = struct ... end`
+    if (isKeyword(peek(), 'structure')) {
+      p++;
+      const nameTok = eat('IDENT');
+      let ascribe = null;
+      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; ascribe = eat('IDENT').v; }
+      eat('EQ');
+      if (!isKeyword(peek(), 'struct')) throw new RonmlError("expected 'struct' after a structure name");
+      p++;
+      const decls = [];
+      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') decls.push(parseTop());
+      if (isKeyword(peek(), 'end')) p++;
+      return { type: 'StructDecl', name: nameTok.v, ascribe, decls };
+    }
     if (isKeyword(peek(), 'datatype')) {
       p++;
       // `datatype 'a option = …` — type parameters are read and thrown away.
@@ -689,13 +807,27 @@ function parse(toks) {
       // Several bindings before the `in`: `let val m = 3 val n = 4 in m+n end`
       // and `let a = 1 and b = 2 in a+b`. `end` closes the block if it is there.
       const extra = [];
+      // Is there an `in` ahead of the next declaration? Without this the loop
+      // swallows the following `fun` inside a struct, where declarations simply
+      // follow one another and no `in` is coming.
+      const inAhead = () => {
+        for (let q = p; q < toks.length; q++) {
+          const t = toks[q];
+          if (t.t === 'EOF') return false;
+          if (t.t !== 'IDENT') continue;
+          const w = t.v.toLowerCase();
+          if (w === 'in') return true;
+          if (w === 'structure' || w === 'signature' || w === 'end') return false;
+        }
+        return false;
+      };
       const isBind = () => {
         let q = p + 1;
         if (!toks[q] || toks[q].t !== 'IDENT') return false;
         while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
         return !!toks[q] && toks[q].t === 'EQ';
       };
-      while ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let')) {
+      while (inAhead() && ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let'))) {
         p++;
         const n2 = eat('IDENT');
         const p2 = letParams();
@@ -1431,6 +1563,7 @@ function evalNode(node, env, ctx, builtins) {
       return evalNode(c.v ? node.then : node.else, env, ctx, builtins);
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    case 'Unit': return { tag: 'unit' };
     case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Record': {
       const fields = {};
@@ -1445,6 +1578,73 @@ function evalNode(node, env, ctx, builtins) {
     // A nullary one IS a value; one that takes arguments is a function that
     // collects them and then is a value. Nothing is checked, because there is
     // nothing here to check with.
+    case 'TypeAbbrev': return { tag: 'typename', name: node.name };
+
+    // An exception is a constructor that can be raised. Declaring one puts it
+    // where names are looked up, exactly like a datatype's constructors.
+    case 'ExnDecl': {
+      const store = (ctx && ctx.session) || {};
+      const reg = (store.__cons = store.__cons || {});
+      reg[node.name] = { name: node.name, arity: node.arity, of: 'exn' };
+      (store.__exn = store.__exn || {})[node.name] = true;
+      store[node.name.toLowerCase()] = node.arity === 0
+        ? { tag: 'con', name: node.name, args: [] }
+        : { tag: 'confn', name: node.name, arity: node.arity, args: [] };
+      return { tag: 'exndecl', name: node.name };
+    }
+
+    case 'Raise': {
+      const v = evalNode(node.arg, env, ctx, builtins);
+      throw new RonmlRaise(v);
+    }
+
+    case 'Handle': {
+      try {
+        return evalNode(node.body, env, ctx, builtins);
+      } catch (e) {
+        if (!(e instanceof RonmlRaise)) throw e;
+        for (const arm of node.arms) {
+          const binds = matchPattern(arm.pat, e.value, ctx);
+          if (!binds) continue;
+          const scope = Object.create(env);
+          for (const k of Object.keys(binds)) scope[k.toLowerCase()] = binds[k];
+          return evalNode(arm.body, scope, ctx, builtins);
+        }
+        throw e;                 // not ours: let it keep going up
+      }
+    }
+
+    case 'SigDecl': {
+      const store = (ctx && ctx.session) || {};
+      (store.__sigs = store.__sigs || {})[node.name] = node.names;
+      return { tag: 'sig', name: node.name, names: node.names };
+    }
+
+    // A structure runs its declarations in a scope of their own and then
+    // publishes them under a prefix, so `Board.size` finds what `size` became.
+    // `:>` publishes only the names the signature lists, which is the real work
+    // a signature does even without a checker behind it: everything else stays
+    // inside, and a caller reaching for it does not find it.
+    case 'StructDecl': {
+      const store = (ctx && ctx.session) || {};
+      const inner = Object.create(env);
+      for (const d of node.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
+      const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;
+      const published = [];
+      for (const k of Object.keys(inner)) {
+        if (k.startsWith('__')) continue;
+        const bare = k;
+        if (allowed && !allowed.some((n) => n.toLowerCase() === bare)) continue;
+        store[`${node.name.toLowerCase()}.${bare}`] = inner[k];
+        published.push(bare);
+      }
+      // Constructors declared inside are visible through the prefix too.
+      const icons = inner.__cons || {};
+      const reg = (store.__cons = store.__cons || {});
+      for (const c of Object.keys(icons)) reg[c] = icons[c];
+      return { tag: 'struct', name: node.name, names: published };
+    }
+
     case 'Datatype': {
       const store = (ctx && ctx.session) || {};
       const reg = (store.__cons = store.__cons || {});
@@ -1556,6 +1756,7 @@ function matchPattern(pat, v, ctx) {
   const cons = (ctx && ctx.session && ctx.session.__cons) || {};
   switch (pat.p) {
     case 'wild': return {};
+    case 'unit': return v && v.tag === 'unit' ? {} : null;
     case 'num': return v && v.tag === 'num' && v.v === pat.v ? {} : null;
     case 'str': return v && v.tag === 'str' && v.v === pat.v ? {} : null;
     case 'bool': return v && v.tag === 'bool' && v.v === pat.v ? {} : null;
@@ -1616,6 +1817,37 @@ function matchPattern(pat, v, ctx) {
   }
 }
 
+// TYPE ANNOTATIONS, AND WHAT THIS MACHINE DOES WITH THEM.
+//
+// Standard ML checks an annotation before anything runs. This build cannot:
+// inference is a whole-program analysis and a console has one line at a time,
+// with the next not yet written. The tempting shortcut is to parse annotations
+// and throw them away, so a file copied out of a manual runs. That is worse
+// than refusing them, because `val x : int = "hello"` would then be accepted
+// and hand you a string: the annotation would say something the machine had no
+// intention of honouring.
+//
+// So they are honoured, LATE. The annotation is checked when the value arrives
+// rather than before the program runs, which is the actual difference between a
+// compiler and a console, and is worth a player knowing. A type this build has
+// no opinion about (a function type, a type variable, a datatype you declared)
+// is carried and not checked, which is stated rather than hidden.
+const TYPE_TAGS = {
+  int: 'num', real: 'num', word: 'num',
+  string: 'str', char: 'str',
+  bool: 'bool', unit: 'unit', list: 'list',
+};
+
+function checkType(ann, v, what) {
+  if (!ann) return v;
+  const want = TYPE_TAGS[ann.toLowerCase()];
+  if (!want) return v;                       // nothing this build can judge
+  if (!v || v.tag !== want) {
+    throw new RonmlError(`${what} is annotated ${ann} but the value is ${describeValue(v)}`);
+  }
+  return v;
+}
+
 function describeValue(v) {
   if (!v) return 'nothing';
   switch (v.tag) {
@@ -1663,6 +1895,10 @@ function formatValue(v) {
     }
     case 'confn': return `<${v.name}>`;
     case 'datatype': return `datatype ${v.name} = ${v.cons.join(' | ')}`;
+    case 'typename': return `type ${v.name}`;
+    case 'exndecl': return `exception ${v.name}`;
+    case 'sig': return `signature ${v.name} = sig ${v.names.join(' ')} end`;
+    case 'struct': return `structure ${v.name} : ${v.names.length} name(s)`;
     case 'binding': return `val ${v.name} = ${formatValue(v.value)}`;
     case 'bindings': return v.names.map((n, i) => `val ${n} = ${formatValue(v.values[i])}`).join('\n');
     case 'closure': return '<fn>';
@@ -1937,18 +2173,16 @@ export function decide(program, sense, opts = {}) {
 // Pure, ordered most specific first, and returns null when nothing is
 // recognised so the parser's own message stands.
 const NOT_FITTED = [
-  [/^\s*(signature|structure|functor|sig|struct)\b/, 'no module system on this build. There are no signatures, structures or functors: put the definitions at the top level. See the Restrictions page.'],
-  [/^\s*(exception)\b|\braise\b|\bhandle\b/, 'no exceptions on this build. An error has to be part of the value you return — a datatype with a failure case does the job.'],
-  [/\bref\b|:=/, 'no mutable references on this build. Nothing here can be assigned to; carry the changing value through the recursion instead.'],
+  // Kept short on purpose, and pruned whenever the build grows: a diagnosis
+  // that fires on something now supported masks the real error, which is what
+  // it did the first time modules landed and it went on saying there were none.
+  [/^\s*(functor)\b/, 'no functors on this build. Structures and signatures are here; parameterised ones are not.'],
   [/^\s*(local|abstype)\b/, 'local is not fitted. Use let ... in ... end.'],
   [/^\s*infix\w*\b|\bop\b/, 'no infix declarations on this build.'],
+  [/\bref\b|:=/, 'no mutable references on this build. Nothing here can be assigned to; carry the changing value through the recursion instead.'],
   [/\b(String|List|Int|Real|Char|Array|Vector|IO|TextIO|Option)\./, 'no standard library on this machine. What there is: hd, tl, length, abs, sqrt, min, max, size.'],
   [/#"/, 'no character type. Use a one-letter string.'],
-  [/\bandalso\b/, 'write and, not andalso.'],
-  [/\borelse\b/, 'write or, not orelse.'],
   [/~\d/, 'no unary minus. Write (0 - n).'],
-  [/^\s*(val|fun)\b[^=]*:\s*[A-Za-z]/, 'no types on this build, so no type annotations. Drop the : and what follows it.'],
-  [/:\s*[A-Za-z_][\w. *>()-]*\s*(->|\*|=|,|\))/, 'that looks like a type annotation, and nothing here is typed. Drop it.'],
 ];
 
 export function diagnose(src) {
@@ -1960,6 +2194,29 @@ export function diagnose(src) {
 // physical line each one started on, so an error can say where. See
 // joinProgramLines for the joining rules; this is the same function with the
 // numbers left in.
+// Parse one line to an AST without evaluating it. Exists so the type checker
+// can look at what you wrote before the machine does anything about it.
+export function parseLine(source) {
+  return parse(tokenize(String(source)));
+}
+
+// What the type checker makes of a line, as a string to print beside the
+// answer. Never throws and never refuses: inference here REPORTS. A machine in
+// a ruin should say what it worked out and let you decide, which is also why a
+// name it has never seen is "anything" rather than an error.
+export function typeReport(source, ctx) {
+  if (!ctx || !ctx.types) return null;
+  try {
+    const ast = parseLine(source);
+    const r = typeOf(ast, ctx.session || {});
+    if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
+    remember(ast, ctx.session || {}, r.t);
+    return r.type;
+  } catch {
+    return null;         // unparseable is the parser's business, not this one's
+  }
+}
+
 export function joinProgram(text) {
   const out = [];
   const lines = String(text).split('\n');
@@ -2043,6 +2300,9 @@ export function runRonml(source, ctx) {
     // If the line is a piece of Standard ML this build does not have, say
     // which piece. The parser's own message names the character it choked
     // on, which for a signature block is a colon, and that helps nobody.
+    if (e instanceof RonmlRaise) {
+      return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}` };
+    }
     const why = diagnose(source);
     if (why) return { ok: false, text: `ERR: ${why}` };
     if (e instanceof RonmlError) return { ok: false, text: `ERR: ${e.message}` };
