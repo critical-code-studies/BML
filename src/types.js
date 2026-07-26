@@ -351,10 +351,53 @@ export function infer(node, env, cons) {
       return node.type === 'TopLetPat' ? t : infer(node.body, env2, cons);
     }
 
+    // An annotation is a claim. Unifying it with what was inferred is what
+    // turns it from a decoration into something the machine holds you to, and
+    // is the only reason it was worth parsing rather than stepping over.
+    case 'Annot': {
+      const t = infer(node.expr, env, cons);
+      const want = fromAnnotation(node.ann, new Map());
+      // `fun sq (n:int):int = …` annotates the RESULT, not the function. Peel
+      // one arrow per parameter before unifying, or the claim is compared
+      // against `num -> num` and reported as a clash that is not one.
+      let target = t;
+      for (let i = 0; i < (node.params || 0); i++) {
+        const a = fresh();
+        const b = fresh();
+        try { unify(target, fnOf(a, b)); } catch { break; }
+        target = b;
+      }
+      unify(target, want);
+      return t;
+    }
+
     case 'Datatype': return UNIT;
 
     default: return fresh();
   }
+}
+
+// Turn a written type into one of ours. A name this build has no opinion about
+// (a datatype you declared, a type abbreviation) becomes a variable: unknown,
+// not wrong, which is the honest reading of a name it has never been told about.
+const ANNOT = { int: NUM, real: NUM, num: NUM, word: NUM, string: STR, str: STR, char: STR, bool: BOOL, unit: UNIT };
+
+export function fromAnnotation(a, vars) {
+  if (!a) return fresh();
+  if (a.t === 'name') {
+    if (/^'/.test(a.name)) {
+      if (!vars.has(a.name)) vars.set(a.name, fresh());
+      return vars.get(a.name);
+    }
+    return ANNOT[a.name.toLowerCase()] || fresh();
+  }
+  if (a.t === 'app') {
+    const inner = fromAnnotation(a.arg, vars);
+    return a.name.toLowerCase() === 'list' ? listOf(inner) : fresh();
+  }
+  if (a.t === 'tuple') return tupleOf(a.parts.map((x) => fromAnnotation(x, vars)));
+  if (a.t === 'fn') return fnOf(fromAnnotation(a.from, vars), fromAnnotation(a.to, vars));
+  return fresh();
 }
 
 // ---- the entry point -------------------------------------------------------

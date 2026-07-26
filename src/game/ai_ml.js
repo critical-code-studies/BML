@@ -243,7 +243,12 @@ function parse(toks) {
   function letParams() {
     const params = [];
     for (;;) {
-      if (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) { params.push(eat('IDENT').v); continue; }
+      if (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) {
+        const nm = eat('IDENT').v;
+        if (peek().t === 'COLON') { p++; parseTypeExpr(); }
+        params.push(nm);
+        continue;
+      }
       if (['LP', 'LB', 'LC', 'NUM', 'STR'].includes(peek().t)) {
         params.push({ pat: parsePatternAtom() }); continue;
       }
@@ -309,9 +314,12 @@ function parse(toks) {
       }
       const nameTok = eat('IDENT');
       const params = letParams();
+      let ann0 = null;
+      if (peek().t === 'COLON') { p++; ann0 = parseTypeExpr(); }
       eat('EQ');
       const first0 = parseExpr();
-      const value = clausalRest(nameTok.v, params, first0) || wrapParams(params, first0);
+      const v0 = clausalRest(nameTok.v, params, first0) || wrapParams(params, first0);
+      const value = ann0 ? { type: 'Annot', expr: v0, ann: ann0, params: params.length } : v0;
       // `let a = 1 and b = 2 in …` and `let val a = 1 val b = 2 in … end`.
       // Several bindings before the `in`, which is how ML writes a local block
       // and how most of the worked examples in the corpus are shaped.
@@ -378,6 +386,14 @@ function parse(toks) {
 
   // Patterns. Cons binds loosest so `x :: y :: rest` reads to the right, the
   // same way the expression does.
+  // A pattern with an optional `: type` after it. Annotations are checked by
+  // the type checker, not here; this only has to let them through.
+  function parsePatternAnn() {
+    const pt = parsePattern();
+    if (peek().t === 'COLON') { p++; parseTypeExpr(); }
+    return pt;
+  }
+
   function parsePattern() {
     const head = parsePatternAtom();
     if (peek().t !== 'CONS') return head;
@@ -438,10 +454,10 @@ function parse(toks) {
     if (tok.t === 'LP') {
       p++;
       if (peek().t === 'RP') { p++; return { p: 'unit' }; }
-      const first = parsePattern();
+      const first = parsePatternAnn();
       if (peek().t === 'COMMA') {
         const items = [first];
-        while (peek().t === 'COMMA') { p++; items.push(parsePattern()); }
+        while (peek().t === 'COMMA') { p++; items.push(parsePatternAnn()); }
         eat('RP');
         return { p: 'tuple', items };
       }
@@ -610,6 +626,7 @@ function parse(toks) {
       p++;
       if (peek().t === 'RP') { p++; return { type: 'Unit' }; }
       const e = parseExpr();
+      if (peek().t === 'COLON') { p++; const ann = parseTypeExpr(); eat('RP'); return { type: 'Annot', expr: e, ann, params: 0 }; }
       // (e) is just e; (e1, e2, ...) is a tuple. Harper introduces tuples
       // before lists (1993, s.2.2.6) because they are the simpler compound:
       // fixed width, and the parts may differ in kind.
@@ -665,6 +682,45 @@ function parse(toks) {
   // A type expression: read for its shape and thrown away, since inference
   // works structurally. Returns the number of *-separated components, which is
   // the one fact a constructor declaration needs from it.
+  // A type expression, KEPT. `int`, `'a`, `int list`, `a * b`, `a -> b`. The
+  // checker unifies it with what it infers, so an annotation is a claim the
+  // machine will hold you to rather than a decoration it steps around.
+  function parseTypeExpr() {
+    const parseAtomT = () => {
+      if (peek().t === 'LP') {
+        p++;
+        const inner = parseTypeExpr();
+        eat('RP');
+        return inner;
+      }
+      const id = eat('IDENT');
+      return { t: 'name', name: id.v };
+    };
+    let left = parseAtomT();
+    // postfix: `int list`, `'a tree`
+    while (peek().t === 'IDENT' && !['of', 'val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(peek().v.toLowerCase())) {
+      left = { t: 'app', name: eat('IDENT').v, arg: left };
+    }
+    if (peek().t === 'STAR') {
+      const parts = [left];
+      while (peek().t === 'STAR') { p++; parts.push(parseTypeExpr1()); }
+      left = { t: 'tuple', parts };
+    }
+    if (peek().t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') {
+      p += 2;
+      return { t: 'fn', from: left, to: parseTypeExpr() };
+    }
+    if (peek().t === 'ARROWT') { p++; return { t: 'fn', from: left, to: parseTypeExpr() }; }
+    return left;
+  }
+  function parseTypeExpr1() {
+    const save = p;
+    try { 
+      const t = parseTypeExpr();
+      return t;
+    } catch { p = save; return { t: 'name', name: '_' }; }
+  }
+
   function skipTypeExpr() {
     let parts = 1;
     let depth = 0;
@@ -801,9 +857,12 @@ function parse(toks) {
       }
       const nameTok = eat('IDENT');
       const params = letParams();
+      let ann = null;
+      if (peek().t === 'COLON') { p++; ann = parseTypeExpr(); }
       eat('EQ');
       const first = parseExpr();
-      const value = clausalRest(nameTok.v, params, first) || wrapParams(params, first);
+      const value0 = clausalRest(nameTok.v, params, first) || wrapParams(params, first);
+      const value = ann ? { type: 'Annot', expr: value0, ann, params: params.length } : value0;
       // Several bindings before the `in`: `let val m = 3 val n = 4 in m+n end`
       // and `let a = 1 and b = 2 in a+b`. `end` closes the block if it is there.
       const extra = [];
@@ -1564,6 +1623,7 @@ function evalNode(node, env, ctx, builtins) {
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Unit': return { tag: 'unit' };
+    case 'Annot': return evalNode(node.expr, env, ctx, builtins);
     case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Record': {
       const fields = {};
@@ -2215,6 +2275,104 @@ export function typeReport(source, ctx) {
   } catch {
     return null;         // unparseable is the parser's business, not this one's
   }
+}
+
+// ---- what this build of the language is ------------------------------------
+//
+// The language has its own version now, separate from the game's. It grew by
+// accretion for two hundred versions and then by measurement against somebody
+// else's corpus, and a reader who pastes a program in deserves to know which
+// build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
+export const AIML_VERSION = '1.0';
+export const AIML_NAME = 'AI-ML';
+
+export function aimlVersion() {
+  return [
+    `${AIML_NAME} ${AIML_VERSION}  (RON build)`,
+    'A descendant of Standard ML. Type inference, modules, exceptions.',
+    'ml -full  for what is here and what is not.',
+  ].join('\n');
+}
+
+// The survey. Written as three columns of fact rather than a sales pitch: what
+// is here, what is not, and what is here but different. A player deciding
+// whether their program will run should be able to decide it from this page.
+export function aimlFull() {
+  const L = [];
+  const sec = (t) => { L.push('', t, '='.repeat(t.length)); };
+  const row = (a, b) => L.push(`  ${a.padEnd(26)}${b}`);
+
+  L.push(`${AIML_NAME} ${AIML_VERSION}  (RON build)`);
+  L.push('The language on the obelisk consoles, the HERMES relays, this laptop,');
+  L.push('and inside every machine that runs a program you can read.');
+
+  sec('VALUES');
+  row('num', '4, 3.5. One number type, not int and real.');
+  row('str', '"a string". ^ joins two.');
+  row('bool', 'true false. and or not, andalso orelse.');
+  row('unit', '()');
+  row('tuple', '(1, "a"). Fixed width, mixed kinds.');
+  row('record', '{ a = 1, b = 2 }. #a selects. #1 works on a tuple.');
+  row('list', 'nil, ::, [1,2,3], @ joins. hd tl length.');
+
+  sec('BINDING AND FUNCTIONS');
+  row('let / val / fun', 'three words, one thing.');
+  row('let ... in ... end', 'several bindings, and joins them.');
+  row('fn x => e', 'lambda. fn takes alternatives too.');
+  row('let f x y = e', 'curried. Partial application gives a function.');
+  row('clausal definitions', 'fun f nil = 0 | f (h::t) = 1 + f t');
+  row('pattern bindings', 'let (m, n) = e, and in parameters.');
+  row('recursion', 'a name is in scope inside its own value.');
+
+  sec('TAKING THINGS APART');
+  row('case e of p => e', 'first arm that fits wins.');
+  row('patterns', 'constructor, variable, _, constant, nil, ::,');
+  L.push('                            tuple, record, { ... }, as.');
+  row('datatype', "datatype 'a option = NONE | SOME of 'a");
+
+  sec('THE LARGER STRUCTURES');
+  row('structure / struct', 'publishes its names under a prefix: Board.size');
+  row('signature / sig', 'names what a structure shows.');
+  row(':>  opaque ascription', 'hides everything the signature omits.');
+  row('exception / raise', 'exception Fail; raise Fail');
+  row('handle', 'e handle Fail => e, with full pattern arms.');
+  row('type', 'type board = int * int. An abbreviation.');
+
+  sec('TYPES');
+  row('inference', 'Hindley-Milner. Runs on this laptop only.');
+  row('', 'map : (\'a -> \'b) -> \'a list -> \'b list');
+  row('annotations', 'val x : int = 5. Checked, not decoration.');
+  row('what it does', 'REPORTS. It names a clash and runs the line');
+  L.push('                            anyway. It is a report, not a gate.');
+  row('why', 'a machine in a ruin should say what it worked');
+  L.push('                            out and let you decide.');
+
+  sec('NOT ON THIS BUILD');
+  row('functors', 'parameterised structures. Not fitted.');
+  row('references', 'no ref, no :=. Nothing can be assigned to.');
+  row('standard library', 'only abs sqrt min max size, and the list verbs.');
+  row('char', 'use a one-letter string.');
+  row('infix declarations', 'no infix, no op.');
+  row('local', 'use let ... in ... end.');
+  row('unary minus', 'write (0 - n), not ~n.');
+  row('int vs real', 'one number type. div is whole division, / is not.');
+
+  sec('WRITTEN DIFFERENTLY');
+  row('==  and  =', 'both are equality. A binding eats its = first.');
+  row('(* comments *)', 'as in ML.');
+  row('echo', 'prints. ; sequences.');
+  row('|>', 'pipes a value into a function.');
+
+  sec('WHERE IT RUNS');
+  row('obelisk console', 'the tower verbs, and the language.');
+  row('HERMES relay', "RON's own, plus the forge.");
+  row('this laptop', 'the language alone, and the type checker.');
+  row('inside a machine', 'its own program, 2,000 steps, four times a second.');
+
+  L.push('');
+  L.push('Measured against the 32 example files of the manual this language');
+  L.push('descends from. Where it departs, the departure is named above.');
+  return L.join('\n');
 }
 
 export function joinProgram(text) {

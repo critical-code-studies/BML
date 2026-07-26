@@ -50,19 +50,23 @@ function decls(src) {
 // and the one Harper's own Restrictions note predicts.
 function translate(d) {
   let s = d;
-  if (/^(structure|signature|functor|exception|infix|open|abstype|local)\b/.test(s)) return null;
-  if (/\b(raise|handle)\b/.test(s)) return null;
+  // Pruned as the language grew. Modules, exceptions and type annotations were
+  // skipped here until v1.252 added them; leaving them in the skip list would
+  // have hidden the gain entirely, which is the third time this instrument has
+  // been the thing that was out of date.
+  if (/^(functor|infix|open|abstype|local)\b/.test(s)) return null;
   if (/\bref\b|:=/.test(s)) return null;                             // mutable cells
   if (/\b(String|List|Int|Real|Array|Vector|IO|TextIO)\./.test(s)) return null;
-  if (/^type\b/.test(s)) return null;                                // type abbreviations
+
 
   s = s.replace(/#"(.)"/g, '"$1"');                                  // char -> 1-char string
-  s = s.replace(/\bandalso\b/g, 'and').replace(/\borelse\b/g, 'or');
+
   s = s.replace(/~(\d)/g, '(0 - $1)');                               // SML negation
   // Drop type annotations. The lookarounds matter: without them this eats the
   // second colon of `h::t` and every list pattern in the corpus turns to `h:`.
-  s = s.replace(/(?<!:):(?!:)\s*[A-Za-z_][\w.*\s>()-]*?(?=\s*[=,)\]]|$)/g, '');
-  s = s.replace(/\bend\b/g, '');
+  // Type annotations are parsed now, so they are left alone. The stripper that
+  // removed them is gone with them, and its lookaround bug with it.
+
 
   s = s.replace(/^fun\s+/, 'let ').replace(/^val\s+/, 'let ');
 
