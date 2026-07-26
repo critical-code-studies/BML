@@ -60,7 +60,8 @@ function tokenize(src) {
     }
     if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }  // cons, as in ML
     if (c === '|' && src[i + 1] === '>') { toks.push({ t: 'PIPE' }); i += 2; continue; }
-    if (c === '|') { toks.push({ t: 'BAR' }); i++; continue; }   // separates datatype constructors and case arms
+    if (c === '|') { toks.push({ t: 'BAR' }); i++; continue; }
+    if (c === '@') { toks.push({ t: 'AT' }); i++; continue; }    // list append   // separates datatype constructors and case arms
     // Comparison operators (two-char forms first). Equality is `==` (bare `=` is
     // reserved for `let`), inequality `!=` or ML's `<>`.
     if (c === '<' && src[i + 1] === '=') { toks.push({ t: 'LE' }); i += 2; continue; }
@@ -103,12 +104,12 @@ function tokenize(src) {
       i = j;
       continue;
     }
-    if (/[A-Za-z_]/.test(c)) {
+    if (/[A-Za-z_]/.test(c) || (c === "'" && /[A-Za-z]/.test(src[i + 1] || ''))) {
       let j = i + 1;
       // `.` is allowed inside an identifier so filenames lex as one token
       // (factory_id.ml, readme.md) — evalNode tags anything ending .ml/.md a file.
       // `-` is NOT: it is the subtraction operator now (codes/filenames underscore).
-      while (j < n && /[A-Za-z0-9_.]/.test(src[j])) j++;
+      while (j < n && /[A-Za-z0-9_.']/.test(src[j])) j++;
       toks.push({ t: 'IDENT', v: src.slice(i, j) });
       i = j;
       continue;
@@ -148,6 +149,53 @@ function parse(toks) {
 
   // Collect zero+ parameter names sitting between a let-name and its `=`, so
   // `let f x y = e` sugars to `let f = fn x => fn y => e`.
+  // `let f p1 = e | f p2 = e` — a function defined by cases, which is how ML
+  // is actually written and how every recursive function in Harper's examples
+  // is spelled. Folded into one lambda per argument with a single case over a
+  // tuple of them, so the arms may test any combination of the arguments.
+  function clausalRest(name, firstParams, firstBody) {
+    const clauses = [{ params: firstParams, body: firstBody }];
+    while (peek().t === 'BAR') {
+      const save = p;
+      p++;
+      if (peek().t !== 'IDENT' || peek().v.toLowerCase() !== name.toLowerCase()) { p = save; break; }
+      p++;
+      const ps = letParams();
+      if (peek().t !== 'EQ') { p = save; break; }
+      p++;
+      clauses.push({ params: ps, body: parseExpr() });
+    }
+    if (clauses.length === 1) return null;
+    const n = clauses[0].params.length;
+    if (clauses.some((c) => c.params.length !== n)) {
+      throw new RonmlError(`every clause of ${name} must take the same number of arguments`);
+    }
+    const tmps = Array.from({ length: n }, (_, i) => `__c${i}`);
+    // A bare name in parameter position is usually a variable, but nil, true,
+    // false and _ are patterns in their own right. Left as variables, `length
+    // nil = 0` binds a variable called nil, matches every list, and the second
+    // clause is never reached — which is exactly what it did.
+    const asPat = (par) => {
+      if (typeof par !== 'string') return par.pat;
+      const lower = par.toLowerCase();
+      if (par === '_') return { p: 'wild' };
+      if (lower === 'nil') return { p: 'nil' };
+      if (lower === 'true') return { p: 'bool', v: true };
+      if (lower === 'false') return { p: 'bool', v: false };
+      return { p: 'name', name: par, args: [] };
+    };
+    const subject = n === 1
+      ? { type: 'Var', name: tmps[0] }
+      : { type: 'Tuple', items: tmps.map((t) => ({ type: 'Var', name: t })) };
+    const arms = clauses.map((c) => ({
+      pat: n === 1 ? asPat(c.params[0]) : { p: 'tuple', items: c.params.map(asPat) },
+      body: c.body,
+    }));
+    let v = { type: 'Case', subject, arms };
+    for (let k = n - 1; k >= 0; k--) v = { type: 'Lam', param: tmps[k], body: v };
+    return v;
+  }
+
   function wrapParams(params, value) {
     let v = value;
     for (let k = params.length - 1; k >= 0; k--) {
@@ -168,7 +216,9 @@ function parse(toks) {
     const params = [];
     for (;;) {
       if (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) { params.push(eat('IDENT').v); continue; }
-      if (peek().t === 'LP' || peek().t === 'LB') { params.push({ pat: parsePatternAtom() }); continue; }
+      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'NUM' || peek().t === 'STR') {
+        params.push({ pat: parsePatternAtom() }); continue;
+      }
       break;
     }
     return params;
@@ -210,7 +260,8 @@ function parse(toks) {
       const nameTok = eat('IDENT');
       const params = letParams();
       eat('EQ');
-      const value = wrapParams(params, parseExpr());
+      const first0 = parseExpr();
+      const value = clausalRest(nameTok.v, params, first0) || wrapParams(params, first0);
       if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let k = hack OB_XXXX in crash OB_XXXX k");
       p++;
       const body = parseExpr();
@@ -385,6 +436,9 @@ function parse(toks) {
   // which is the shortest correct way to say right-associative.
   function parseCons() {
     const left = parseAdd();
+    // `@` joins two lists where `::` puts one value on the front of one. Both
+    // group to the right and sit at the same level, as they do in ML.
+    if (peek().t === 'AT') { p++; return { type: 'Append', left, right: parseCons() }; }
     if (peek().t !== 'CONS') return left;
     p++;
     return { type: 'Cons', head: left, tail: parseCons() };
@@ -469,6 +523,11 @@ function parse(toks) {
     // checking. The Restrictions page says as much rather than implying more.
     if (isKeyword(peek(), 'datatype')) {
       p++;
+      // `datatype 'a option = …` — type parameters are read and thrown away.
+      // Nothing here is typed, so they carry no meaning, but a declaration
+      // copied out of a manual should still declare its constructors.
+      while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
+      if (peek().t === 'LP') { while (peek().t !== 'RP') p++; p++; }
       const nameTok = eat('IDENT');
       eat('EQ');
       const cons = [];
@@ -481,7 +540,12 @@ function parse(toks) {
           // Skip the type expression, counting * separators. A type here is a
           // run of identifiers; nothing else may appear.
           eat('IDENT');
-          while (peek().t === 'STAR') { p++; eat('IDENT'); arity++; }
+          while (peek().t === 'IDENT' && !isKeyword(peek(), 'of')) p++;   // `'a tree` is two words, one type
+          while (peek().t === 'STAR') {
+            p++; arity++;
+            eat('IDENT');
+            while (peek().t === 'IDENT' && !isKeyword(peek(), 'of')) p++;
+          }
         }
         cons.push({ name: c.v, arity });
         if (peek().t !== 'BAR') break;
@@ -508,7 +572,8 @@ function parse(toks) {
       const nameTok = eat('IDENT');
       const params = letParams();
       eat('EQ');
-      const value = wrapParams(params, parseExpr());
+      const first = parseExpr();
+      const value = clausalRest(nameTok.v, params, first) || wrapParams(params, first);
       if (isKeyword(peek(), 'in')) {
         p++;
         const body = parseExpr();
@@ -1181,6 +1246,13 @@ function evalNode(node, env, ctx, builtins) {
     // Cons builds a list by putting one value on the front of another list,
     // which is the definition rather than a convenience: Harper (1993, p.9)
     // gives the empty list and cons as the two cases a list can be.
+    case 'Append': {
+      const a = evalNode(node.left, env, ctx, builtins);
+      const b = evalNode(node.right, env, ctx, builtins);
+      if (!a || a.tag !== 'list') throw new RonmlError(`${describeValue(a)} is not a list — @ joins two lists`);
+      if (!b || b.tag !== 'list') throw new RonmlError(`${describeValue(b)} is not a list — @ joins two lists`);
+      return { tag: 'list', items: [...a.items, ...b.items] };
+    }
     case 'Cons': {
       const head = evalNode(node.head, env, ctx, builtins);
       const tail = evalNode(node.tail, env, ctx, builtins);
