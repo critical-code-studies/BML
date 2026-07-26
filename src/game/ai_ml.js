@@ -1217,6 +1217,25 @@ function makeBuiltins(station) {
     // characters
     ord: { arity: 1, fn: ([c]) => { if (!c || c.tag !== 'char') throw new RonmlError(`${describeValue(c)} is not a character`); return { tag: 'int', v: c.v.charCodeAt(0) }; } },
     chr: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'char', v: String.fromCharCode(n.v) }; } },
+    // WHAT THE CARD CAN HEAR. Not the control wire — this is the NostBook's own
+    // wireless card reading traffic off the air, the same table `arp -a` prints.
+    // A machine broadcasts to its tower whether or not anyone is listening, so
+    // listening costs nothing and gives itself away to nobody.
+    units: {
+      arity: 0,
+      fn: (_args, ctx) => ({
+        tag: 'list',
+        items: ((ctx && ctx.units && ctx.units()) || []).map((u) => ({
+          tag: 'record',
+          fields: {
+            name: { tag: 'str', v: String(u.name) },
+            range: { tag: 'int', v: Number(u.range) || 0 },
+            bearing: { tag: 'str', v: String(u.bearing) },
+            kind: { tag: 'str', v: String(u.kind || '?') },
+          },
+        })),
+      }),
+    },
     str: { arity: 1, fn: ([c]) => { if (!c || c.tag !== 'char') throw new RonmlError(`${describeValue(c)} is not a character`); return { tag: 'str', v: c.v }; } },
     explode: { arity: 1, fn: ([x]) => { if (!x || x.tag !== 'str') throw new RonmlError(`${describeValue(x)} is not a string`); return { tag: 'list', items: [...x.v].map((ch) => ({ tag: 'char', v: ch })) }; } },
     implode: { arity: 1, fn: ([l]) => { if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`); return { tag: 'str', v: l.items.map((c) => (c && c.tag === 'char' ? c.v : formatValue(c))).join('') }; } },
@@ -1574,7 +1593,7 @@ const HERMES_VERBS = ['read', 'archive', 'records', 'drive', 'backup', 'restore'
 // the language rather than perform it under fire. A tower verb typed here is not a
 // typo, it is a machine that isn't listening: evalNode says so and points at a tower.
 const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size',
-  'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode', 'ref'];
+  'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode', 'ref', 'units'];
 // A MACHINE'S OWN STATION. Its program runs here: senses in, an intent out, and
 // nothing else within reach — no network, no files, no console verbs. That is
 // not a restriction bolted on, it is what a unit actually has.
@@ -2573,7 +2592,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.3';
+export const AIML_VERSION = '1.4';
 export const AIML_NAME = 'AI-ML';
 
 export function aimlVersion() {
@@ -2672,6 +2691,9 @@ export function aimlFull() {
   L.push('  feet: patrol hunt flee home tend wait   weapon: fire hold reload');
   L.push('  senses: charge integrity range home_range threat hurt linked');
   L.push('          blight daylight sight armed shielded contact lost_for');
+  L.push('');
+  L.push('  On THIS machine only: `units` is what the wireless card can hear —');
+  L.push('  a list of records with name, range, bearing and kind. See sniffer.ml.');
 
   return L.join('\n');
 }
