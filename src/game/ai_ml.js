@@ -1269,6 +1269,16 @@ function makeBuiltins(station) {
     linked: SENSE('linked', 'bool'),
     blight: SENSE('blight', 'bool'),
     daylight: SENSE('daylight', 'bool'),
+    // ---- fire control (P8) ----------------------------------------------
+    // The level below `hunt`. A machine that carries a weapon has to know
+    // whether it can see the target, whether it is loaded, whether the target
+    // is behind something, whether it is being touched, and how long it has
+    // been looking without finding anything.
+    sight: SENSE('sight', 'bool'),
+    armed: SENSE('armed', 'bool'),
+    shielded: SENSE('shielded', 'bool'),
+    contact: SENSE('contact', 'bool'),
+    lost_for: SENSE('lost_for', 'num'),
     // ---- a machine's own EFFECTS ----------------------------------------
     // Sensors read; these do. They are not intents: a program still evaluates
     // to exactly one intent, and these happen along the way, exactly like
@@ -1571,7 +1581,11 @@ const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min',
 // What a machine's own program may say. `not` and `echo` are the language's,
 // not the machine's, so they are listed here but stay neutral elsewhere.
 const MACHINE_ONLY = ['charge', 'integrity', 'range', 'home_range',
-  'threat', 'hurt', 'linked', 'blight', 'daylight', 'beep', 'eye', 'flash'];
+  'threat', 'hurt', 'linked', 'blight', 'daylight', 'beep', 'eye', 'flash',
+  // Fire control (docs/robot-programs-plan.md P8). A machine that shoots needs
+  // to know whether it can see, whether it is loaded, whether the target is
+  // covered, whether it is being touched, and how long it has been looking.
+  'sight', 'armed', 'shielded', 'contact', 'lost_for'];
 const ROBOT_VERBS = [...MACHINE_ONLY, 'not', 'echo', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size',
   'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode'];
 // Retired verbs kept only so typing one gives a clean "not a command" instead
@@ -2382,6 +2396,11 @@ function runStar(rest, ctx) {
 // not creative.
 export const INTENTS = ['patrol', 'hunt', 'flee', 'home', 'tend', 'wait'];
 
+// What a program may say about its weapon, alongside what it says about its
+// feet. A unit moves and shoots in the same quarter-second, so one intent per
+// tick cannot describe it, which is why a program may return a pair.
+export const FIRE = ['fire', 'hold', 'reload'];
+
 // Run a machine's own program against a snapshot of its senses and get back the
 // intent it chose. Pure: no world, no mutation, no clock. Returns
 // {ok:true, intent} or {ok:false, fault} — and a fault is a fact about the
@@ -2405,11 +2424,21 @@ export function decide(program, sense, opts = {}) {
   const effects = EFFECTS;
   EFFECTS = null;
   if (!r.ok) return { ok: false, fault: r.text.replace(/^ERR: /, ''), effects };
-  const intent = String(r.text).trim().toLowerCase();
+
+  // A program returns either ONE intent, or a PAIR of what to do with its feet
+  // and what to do with its weapon: `[hunt, fire]`. The pair exists because a
+  // W-4 moves and shoots in the same tick and a single word cannot say that.
+  const raw = String(r.text).trim();
+  const pair = raw.match(/^\[\s*([a-z_]+)\s*,\s*([a-z_]+)\s*\]$/i);
+  const intent = (pair ? pair[1] : raw).toLowerCase();
+  const fire = pair ? pair[2].toLowerCase() : null;
   if (!INTENTS.includes(intent)) {
-    return { ok: false, fault: `'${r.text}' is not something this unit can do`, effects };
+    return { ok: false, fault: `'${pair ? pair[1] : raw}' is not something this unit can do`, effects };
   }
-  return { ok: true, intent, effects };
+  if (fire && !FIRE.includes(fire)) {
+    return { ok: false, fault: `'${pair[2]}' is not something this unit can do with a weapon`, effects };
+  }
+  return { ok: true, intent, fire, effects };
 }
 
 
@@ -2544,7 +2573,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.2';
+export const AIML_VERSION = '1.3';
 export const AIML_NAME = 'AI-ML';
 
 export function aimlVersion() {
@@ -2638,6 +2667,11 @@ export function aimlFull() {
   row('HERMES relay', "RON's own, plus the forge.");
   row('this laptop', 'the language alone, and the type checker.');
   row('inside a machine', 'its own program, 2,000 steps, four times a second.');
+  L.push('');
+  L.push('  A machine answers with an intent, or a pair: [hunt, fire].');
+  L.push('  feet: patrol hunt flee home tend wait   weapon: fire hold reload');
+  L.push('  senses: charge integrity range home_range threat hurt linked');
+  L.push('          blight daylight sight armed shielded contact lost_for');
 
   return L.join('\n');
 }
