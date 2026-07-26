@@ -1934,8 +1934,23 @@ export function decide(program, sense, opts = {}) {
 export function joinProgramLines(text) {
   const out = [];
   for (const raw of String(text).split('\n')) {
-    const line = raw.replace(/\(\*.*?\*\)/g, '').replace(/\s+$/, '');
+    let line = raw.replace(/\(\*.*?\*\)/g, '').replace(/\s+$/, '');
     if (!line.trim()) { continue; }
+    // A pasted TRANSCRIPT, not a program. Every example in the documentation
+    // and in the manuals this language descends from is printed the way a
+    // session looks: the line you type, then the answer marked with >. Copying
+    // an example out of the manual is the whole point of putting it there, so
+    // the answers have to be skipped rather than parsed.
+    //
+    // Only an UNINDENTED > counts, which keeps this consistent with the rule
+    // one line below: indentation means continuation. So a transcript answer
+    // at the left margin is dropped, and `  > 2` under `let big = 3` still
+    // joins. The cost is that a transcript copied WITH its surrounding block
+    // indent is not recognised; strip the indent and it runs.
+    if (/^>/.test(line)) continue;
+    // And the other half of the same convention: SML transcripts mark the
+    // lines you type with a leading `- `.
+    line = line.replace(/^(\s*)-\s+(?=[A-Za-z(\[])/, '$1');
     const continues = /^\s/.test(raw) || /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(line);
     if (continues && out.length) out[out.length - 1] += ` ${line.trim()}`;
     else out.push(line.trim());
