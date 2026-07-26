@@ -27,7 +27,11 @@ let NEXT = 0;
 export function fresh() { return { k: 'var', id: NEXT++, ref: null }; }
 export function con(name, args = []) { return { k: 'con', name, args }; }
 
-export const NUM = con('num');
+export const INT = con('int');
+export const REAL = con('real');
+export const CHAR = con('char');
+// Kept as a name for the places that only care that it is a number.
+export const NUM = INT;
 export const STR = con('str');
 export const BOOL = con('bool');
 export const UNIT = con('unit');
@@ -161,10 +165,17 @@ function baseEnv() {
     tl: scheme([a.id], fnOf(listOf(a), listOf(a))),
     length: scheme([a.id], fnOf(listOf(a), NUM)),
     not: mono(fnOf(BOOL, BOOL)),
-    abs: mono(fnOf(NUM, NUM)),
-    sqrt: mono(fnOf(NUM, NUM)),
-    min: mono(fnOf(NUM, fnOf(NUM, NUM))),
-    max: mono(fnOf(NUM, fnOf(NUM, NUM))),
+    abs: scheme([a.id], fnOf(a, a)),
+    sqrt: mono(fnOf(REAL, REAL)),
+    min: scheme([a.id], fnOf(a, fnOf(a, a))),
+    max: scheme([a.id], fnOf(a, fnOf(a, a))),
+    real: mono(fnOf(INT, REAL)),
+    floor: mono(fnOf(REAL, INT)),
+    ord: mono(fnOf(CHAR, INT)),
+    chr: mono(fnOf(INT, CHAR)),
+    str: mono(fnOf(CHAR, STR)),
+    explode: mono(fnOf(STR, listOf(CHAR))),
+    implode: mono(fnOf(listOf(CHAR), STR)),
     size: scheme([b.id], fnOf(b, NUM)),
     echo: scheme([b.id], fnOf(b, UNIT)),
   };
@@ -175,7 +186,8 @@ function baseEnv() {
 function inferPattern(pat, binds, cons) {
   switch (pat.p) {
     case 'wild': return fresh();
-    case 'num': return NUM;
+    case 'num': return pat.real ? REAL : INT;
+    case 'char': return CHAR;
     case 'str': return STR;
     case 'bool': return BOOL;
     case 'nil': return listOf(fresh());
@@ -194,6 +206,11 @@ function inferPattern(pat, binds, cons) {
     case 'as': {
       const t = inferPattern(pat.pat, binds, cons);
       binds[pat.name.toLowerCase()] = t;
+      return t;
+    }
+    case 'ann': {
+      const t = inferPattern(pat.pat, binds, cons);
+      unify(t, fromAnnotation(pat.ann, new Map()));
       return t;
     }
     case 'name': {
@@ -220,12 +237,31 @@ function inferPattern(pat, binds, cons) {
 }
 
 const NUMERIC = new Set(['PLUS', 'MINUS', 'STAR', 'SLASH', 'MOD', 'DIV']);
+
+// `+` works on int and on real but on nothing else, and plain Hindley-Milner
+// has no way to say that. Standard ML resolves the same problem by defaulting
+// an unresolved arithmetic operand to int, and so does this: still a variable
+// means nothing has decided, so decide int; anything that is not a number is a
+// clash and is reported as one.
+function numeric(t, op) {
+  const p = prune(t);
+  if (p.k === 'var') { unify(p, INT); return INT; }
+  if (p.name !== 'int' && p.name !== 'real') {
+    throw new TypeError_(`${show(p)} is not a number, and ${op === 'STAR' ? '*' : 'arithmetic'} needs one`);
+  }
+  return p;
+}
 const COMPARE = new Set(['LT', 'GT', 'LE', 'GE']);
 
 export function infer(node, env, cons) {
   switch (node.type) {
-    case 'Lit': return NUM;
+    case 'Lit': return node.real ? REAL : INT;
+    case 'CharLit': return CHAR;
     case 'StrLit': return STR;
+    case 'Neg': {
+      const t = infer(node.arg, env, cons);
+      return t;      // int or real, whichever it was
+    }
 
     case 'Var': {
       const k = node.name.toLowerCase();
@@ -241,6 +277,7 @@ export function infer(node, env, cons) {
 
     case 'Lam': {
       const p = fresh();
+      if (node.ann) unify(p, fromAnnotation(node.ann, new Map()));
       const env2 = { ...env, [node.param.toLowerCase()]: mono(p) };
       return fnOf(p, infer(node.body, env2, cons));
     }
@@ -265,8 +302,13 @@ export function infer(node, env, cons) {
       const l = infer(node.left, env, cons);
       const r = infer(node.right, env, cons);
       if (node.op === 'CARET') { unify(l, STR); unify(r, STR); return STR; }
-      if (NUMERIC.has(node.op)) { unify(l, NUM); unify(r, NUM); return NUM; }
-      if (COMPARE.has(node.op)) { unify(l, NUM); unify(r, NUM); return BOOL; }
+      // + - * take two of the SAME numeric kind and give that kind back, which
+      // is how the two are kept apart without a coercion anywhere. div and mod
+      // are whole-number only; / is real only.
+      if (node.op === 'DIV' || node.op === 'MOD') { unify(l, INT); unify(r, INT); return INT; }
+      if (node.op === 'SLASH') { unify(l, REAL); unify(r, REAL); return REAL; }
+      if (NUMERIC.has(node.op)) { unify(l, r); return numeric(l, node.op); }
+      if (COMPARE.has(node.op)) { unify(l, r); numeric(l, node.op); return BOOL; }
       unify(l, r);                 // == and <> compare any two of one type
       return BOOL;
     }
@@ -377,7 +419,7 @@ export function infer(node, env, cons) {
 // Turn a written type into one of ours. A name this build has no opinion about
 // (a datatype you declared, a type abbreviation) becomes a variable: unknown
 // rather than wrong.
-const ANNOT = { int: NUM, real: NUM, num: NUM, word: NUM, string: STR, str: STR, char: STR, bool: BOOL, unit: UNIT };
+const ANNOT = { int: INT, real: REAL, num: INT, word: INT, string: STR, str: STR, char: CHAR, bool: BOOL, unit: UNIT };
 
 export function fromAnnotation(a, vars) {
   if (!a) return fresh();

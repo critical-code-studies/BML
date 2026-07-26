@@ -25,6 +25,8 @@
 
 import { typeOf, remember } from './types.js';
 
+const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
+
 export class RonmlError extends Error {}
 
 // The current run's print buffer. `echo` pushes into it as it evaluates and the
@@ -74,6 +76,15 @@ function tokenize(src) {
     if (c === '@') { toks.push({ t: 'AT' }); i++; continue; }    // list append
     if (c === '{') { toks.push({ t: 'LC' }); i++; continue; }    // record
     if (c === '}') { toks.push({ t: 'RC' }); i++; continue; }
+    // #"a" is a character; #label and #1 are selectors. The quote tells them
+    // apart, and it has to be checked first or every char lexes as a selector.
+    if (c === '#' && src[i + 1] === '"') {
+      const ch = src[i + 2];
+      if (src[i + 3] !== '"') throw new RonmlError('a character is one letter: #"a"');
+      toks.push({ t: 'CHAR', v: ch });
+      i += 4;
+      continue;
+    }
     if (c === '#') { toks.push({ t: 'HASH' }); i++; continue; }  // #label and #1
     if (c === '.' && src[i + 1] === '.' && src[i + 2] === '.') { toks.push({ t: 'ELLIPSIS' }); i += 3; continue; }   // separates datatype constructors and case arms
     // Comparison operators (two-char forms first). Equality is `==` (bare `=` is
@@ -113,11 +124,22 @@ function tokenize(src) {
     }
     if (/[0-9]/.test(c)) {
       let j = i + 1;
-      while (j < n && /[0-9.]/.test(src[j])) j++;
-      toks.push({ t: 'NUM', v: parseFloat(src.slice(i, j)) });
+      while (j < n && /[0-9]/.test(src[j])) j++;
+      // A decimal point makes it a real, and only if a digit follows: `1.5` is
+      // a real, `l.hd` is a qualified name, and `[1,2]` is two ints.
+      let real = false;
+      if (src[j] === '.' && /[0-9]/.test(src[j + 1] || '')) {
+        real = true;
+        j++;
+        while (j < n && /[0-9]/.test(src[j])) j++;
+      }
+      toks.push({ t: 'NUM', v: parseFloat(src.slice(i, j)), real });
       i = j;
       continue;
     }
+    // `~` is SML's unary minus. It was never lexed, which is the whole reason
+    // it was missing.
+    if (c === '~' && /[0-9(]/.test(src[i + 1] || '')) { toks.push({ t: 'NEG' }); i++; continue; }
     if (/[A-Za-z_]/.test(c) || (c === "'" && /[A-Za-z]/.test(src[i + 1] || ''))) {
       let j = i + 1;
       // `.` is allowed inside an identifier so filenames lex as one token
@@ -204,6 +226,7 @@ function parse(toks) {
     // nil = 0` binds a variable called nil, matches every list, and the second
     // clause is never reached — which is exactly what it did.
     const asPat = (par) => {
+      if (par && par.name && par.ann) return { p: 'name', name: par.name, args: [] };
       if (typeof par !== 'string') return par.pat;
       const lower = par.toLowerCase();
       if (par === '_') return { p: 'wild' };
@@ -229,6 +252,7 @@ function parse(toks) {
     for (let k = params.length - 1; k >= 0; k--) {
       const par = params[k];
       if (typeof par === 'string') { v = { type: 'Lam', param: par, body: v }; continue; }
+      if (par.name) { v = { type: 'Lam', param: par.name, ann: par.ann, body: v }; continue; }
       // A pattern parameter becomes a lambda over a fresh name that immediately
       // takes its argument apart. Same machinery as case, no new runtime.
       const tmp = `__arg${k}`;
@@ -245,11 +269,14 @@ function parse(toks) {
     for (;;) {
       if (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) {
         const nm = eat('IDENT').v;
-        if (peek().t === 'COLON') { p++; parseTypeExpr(); }
+        // A parameter's annotation is kept, not stepped over: `fun sq (n:int)`
+        // has to constrain n, or the return annotation is the only claim in
+        // the line and it drags the parameter along with it.
+        if (peek().t === 'COLON') { p++; params.push({ name: nm, ann: parseTypeExpr() }); continue; }
         params.push(nm);
         continue;
       }
-      if (['LP', 'LB', 'LC', 'NUM', 'STR'].includes(peek().t)) {
+      if (['LP', 'LB', 'LC', 'NUM', 'STR', 'CHAR', 'NEG'].includes(peek().t)) {
         params.push({ pat: parsePatternAtom() }); continue;
       }
       break;
@@ -390,8 +417,9 @@ function parse(toks) {
   // the type checker, not here; this only has to let them through.
   function parsePatternAnn() {
     const pt = parsePattern();
-    if (peek().t === 'COLON') { p++; parseTypeExpr(); }
-    return pt;
+    if (peek().t !== 'COLON') return pt;
+    p++;
+    return { p: 'ann', pat: pt, ann: parseTypeExpr() };
   }
 
   function parsePattern() {
@@ -421,7 +449,9 @@ function parse(toks) {
 
   function parsePatternAtom() {
     const tok = peek();
-    if (tok.t === 'NUM') { p++; return { p: 'num', v: tok.v }; }
+    if (tok.t === 'NUM') { p++; return { p: 'num', v: tok.v, real: !!tok.real }; }
+    if (tok.t === 'CHAR') { p++; return { p: 'char', v: tok.v }; }
+    if (tok.t === 'NEG') { p++; const n2 = eat('NUM'); return { p: 'num', v: -n2.v, real: !!n2.real }; }
     if (tok.t === 'STR') { p++; return { p: 'str', v: tok.v }; }
     if (tok.t === 'MINUS') { p++; const n = eat('NUM'); return { p: 'num', v: -n.v }; }
     if (tok.t === 'LB') {
@@ -602,7 +632,7 @@ function parse(toks) {
     // as a variable named "then".
     if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'andalso', 'orelse', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end',
       'structure', 'signature', 'sig', 'struct', 'exception', 'raise', 'handle', 'type'].includes(tok.v.toLowerCase())) return false;
-    return tok.t === 'NUM' || tok.t === 'STR' || tok.t === 'IDENT' || tok.t === 'LP' || tok.t === 'LB' || tok.t === 'LC' || tok.t === 'HASH';
+    return ['NUM', 'STR', 'CHAR', 'NEG', 'IDENT', 'LP', 'LB', 'LC', 'HASH'].includes(tok.t);
   }
 
   function parseApp() {
@@ -619,7 +649,9 @@ function parse(toks) {
     // Unary minus: `-3` is `0 - 3`. (Binary `5 - 3` is caught in parseAdd before
     // we ever reach here, so this only fires when `-` opens a subexpression.)
     if (tok.t === 'MINUS') { p++; return { type: 'Bin', op: 'MINUS', left: { type: 'Lit', value: 0 }, right: parseAtom() }; }
-    if (tok.t === 'NUM') { p++; return { type: 'Lit', value: tok.v }; }
+    if (tok.t === 'NUM') { p++; return { type: 'Lit', value: tok.v, real: !!tok.real }; }
+    if (tok.t === 'CHAR') { p++; return { type: 'CharLit', value: tok.v }; }
+    if (tok.t === 'NEG') { p++; const a = parseAtom(); return { type: 'Neg', arg: a }; }
     if (tok.t === 'STR') { p++; return { type: 'StrLit', value: tok.v }; }
     if (tok.t === 'IDENT') { p++; return { type: 'Var', name: tok.v }; }
     if (tok.t === 'LP') {
@@ -940,7 +972,7 @@ function SENSE(field, kind) {
     arity: 0,
     fn: (_args, ctx) => {
       const v = ctx && ctx.sense ? ctx.sense[field] : undefined;
-      return kind === 'bool' ? { tag: 'bool', v: !!v } : { tag: 'num', v: Number(v) || 0 };
+      return kind === 'bool' ? { tag: 'bool', v: !!v } : { tag: 'int', v: Number(v) || 0 };
     },
   };
 }
@@ -1119,11 +1151,20 @@ function makeBuiltins(station) {
     // ---- the little that stands in for a standard library ------------
     // A machine with no floating-point unit and no printer does not get one,
     // but these five come up in every worked example and cost nothing.
-    abs: { arity: 1, fn: ([n]) => { if (!n || n.tag !== 'num') throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'num', v: Math.abs(n.v) }; } },
-    sqrt: { arity: 1, fn: ([n]) => { if (!n || n.tag !== 'num') throw new RonmlError(`${describeValue(n)} is not a number`); if (n.v < 0) throw new RonmlError('sqrt of a negative'); return { tag: 'num', v: Math.sqrt(n.v) }; } },
-    min: { arity: 2, fn: ([a, b]) => { if (!a || a.tag !== 'num' || !b || b.tag !== 'num') throw new RonmlError('min needs two numbers'); return { tag: 'num', v: Math.min(a.v, b.v) }; } },
-    max: { arity: 2, fn: ([a, b]) => { if (!a || a.tag !== 'num' || !b || b.tag !== 'num') throw new RonmlError('max needs two numbers'); return { tag: 'num', v: Math.max(a.v, b.v) }; } },
-    size: { arity: 1, fn: ([x]) => { if (x && x.tag === 'str') return { tag: 'num', v: x.v.length }; if (x && x.tag === 'list') return { tag: 'num', v: x.items.length }; throw new RonmlError(`${describeValue(x)} has no size`); } },
+    abs: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: n.tag, v: Math.abs(n.v) }; } },
+    sqrt: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); if (n.v < 0) throw new RonmlError('sqrt of a negative'); return { tag: 'real', v: Math.sqrt(n.v) }; } },
+    // int and real do not mix, so there have to be ways across.
+    real: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'real', v: n.v }; } },
+    floor: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'int', v: Math.floor(n.v) }; } },
+    // characters
+    ord: { arity: 1, fn: ([c]) => { if (!c || c.tag !== 'char') throw new RonmlError(`${describeValue(c)} is not a character`); return { tag: 'int', v: c.v.charCodeAt(0) }; } },
+    chr: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'char', v: String.fromCharCode(n.v) }; } },
+    str: { arity: 1, fn: ([c]) => { if (!c || c.tag !== 'char') throw new RonmlError(`${describeValue(c)} is not a character`); return { tag: 'str', v: c.v }; } },
+    explode: { arity: 1, fn: ([x]) => { if (!x || x.tag !== 'str') throw new RonmlError(`${describeValue(x)} is not a string`); return { tag: 'list', items: [...x.v].map((ch) => ({ tag: 'char', v: ch })) }; } },
+    implode: { arity: 1, fn: ([l]) => { if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`); return { tag: 'str', v: l.items.map((c) => (c && c.tag === 'char' ? c.v : formatValue(c))).join('') }; } },
+    min: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('min needs two numbers'); return { tag: a.tag, v: Math.min(a.v, b.v) }; } },
+    max: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('max needs two numbers'); return { tag: a.tag, v: Math.max(a.v, b.v) }; } },
+    size: { arity: 1, fn: ([x]) => { if (x && x.tag === 'str') return { tag: 'int', v: x.v.length }; if (x && x.tag === 'list') return { tag: 'int', v: x.items.length }; throw new RonmlError(`${describeValue(x)} has no size`); } },
     hd: {
       arity: 1,
       fn: ([l]) => {
@@ -1143,9 +1184,9 @@ function makeBuiltins(station) {
     length: {
       arity: 1,
       fn: ([l]) => {
-        if (l && l.tag === 'str') return { tag: 'num', v: String(l.v).length };
+        if (l && l.tag === 'str') return { tag: 'int', v: String(l.v).length };
         if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} has no length`);
-        return { tag: 'num', v: l.items.length };
+        return { tag: 'int', v: l.items.length };
       },
     },
     not: {
@@ -1462,7 +1503,8 @@ const HERMES_VERBS = ['read', 'archive', 'records', 'drive', 'backup', 'restore'
 // arithmetic / `;` / recursion), which is exactly what makes it a place to LEARN
 // the language rather than perform it under fire. A tower verb typed here is not a
 // typo, it is a machine that isn't listening: evalNode says so and points at a tower.
-const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size'];
+const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size',
+  'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode'];
 // A MACHINE'S OWN STATION. Its program runs here: senses in, an intent out, and
 // nothing else within reach — no network, no files, no console verbs. That is
 // not a restriction bolted on, it is what a unit actually has.
@@ -1470,7 +1512,8 @@ const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min',
 // not the machine's, so they are listed here but stay neutral elsewhere.
 const MACHINE_ONLY = ['charge', 'integrity', 'range', 'home_range',
   'threat', 'hurt', 'linked', 'blight', 'daylight', 'beep', 'eye', 'flash'];
-const ROBOT_VERBS = [...MACHINE_ONLY, 'not', 'echo', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size'];
+const ROBOT_VERBS = [...MACHINE_ONLY, 'not', 'echo', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size',
+  'real', 'floor', 'ord', 'chr', 'str', 'explode', 'implode'];
 // Retired verbs kept only so typing one gives a clean "not a command" instead
 // of a cryptic node error (make/ping were removed when TORs became info-only).
 const RETIRED_VERBS = ['make', 'ping'];
@@ -1535,7 +1578,11 @@ function applyValue(fnVal, argVal) {
 function valuesEqual(a, b) {
   if (!a || !b || a.tag !== b.tag) return false;
   switch (a.tag) {
-    case 'num': case 'str': case 'bool': return a.v === b.v;
+    case 'int': case 'real': case 'str': case 'bool': case 'char': return a.v === b.v;
+    case 'tuple': return a.items.length === b.items.length && a.items.every((x, i) => valuesEqual(x, b.items[i]));
+    case 'list': return a.items.length === b.items.length && a.items.every((x, i) => valuesEqual(x, b.items[i]));
+    case 'con': return a.name === b.name && (a.args || []).length === (b.args || []).length
+      && (a.args || []).every((x, i) => valuesEqual(x, b.args[i]));
     case 'node': return a.id === b.id;
     case 'key': return a.kind === b.kind && a.id === b.id;
     case 'file': return a.name === b.name;
@@ -1550,28 +1597,40 @@ function applyBinOp(op, l, r) {
   if (op === 'CARET') return { tag: 'str', v: formatValue(l) + formatValue(r) };
   if (op === 'EQEQ') return { tag: 'bool', v: valuesEqual(l, r) };
   if (op === 'NE') return { tag: 'bool', v: !valuesEqual(l, r) };
-  const num = (x) => {
-    if (!x || x.tag !== 'num') throw new RonmlError(`${describeValue(x)} is not a number — arithmetic and comparison need numbers`);
+
+  // int and real are separate types now, as they are in ML, and the operators
+  // divide along the same line: div and mod are whole-number, / is not. There
+  // is no coercion between them; `real` and `floor` convert on request.
+  const isInt = (x) => x && x.tag === 'int';
+  const isReal = (x) => x && x.tag === 'real';
+  const numeric = (x) => isInt(x) || isReal(x);
+  const need = (x) => {
+    if (!numeric(x)) throw new RonmlError(`${describeValue(x)} is not a number — arithmetic and comparison need numbers`);
     return x.v;
   };
-  const a = num(l), b = num(r);
+  const a = need(l);
+  const b = need(r);
+  if (isInt(l) !== isInt(r)) {
+    throw new RonmlError(`${describeValue(l)} and ${describeValue(r)} are not the same kind of number — use real n or floor x`);
+  }
+  const tag = isReal(l) ? 'real' : 'int';
+
   switch (op) {
-    case 'PLUS': return { tag: 'num', v: a + b };
-    case 'MINUS': return { tag: 'num', v: a - b };
-    case 'STAR': return { tag: 'num', v: a * b };
+    case 'PLUS': return { tag, v: a + b };
+    case 'MINUS': return { tag, v: a - b };
+    case 'STAR': return { tag, v: a * b };
     case 'SLASH':
+      if (tag !== 'real') throw new RonmlError('/ divides reals. For whole numbers use div');
       if (b === 0) throw new RonmlError('division by zero');
-      return { tag: 'num', v: a / b };
-    // What is left over. The reason it is here: a machine that should act every
-    // N ticks needs `tick mod n == 0`, and there was no way to write that.
+      return { tag: 'real', v: a / b };
     case 'MOD':
+      if (tag !== 'int') throw new RonmlError('mod is for whole numbers');
       if (b === 0) throw new RonmlError('mod by zero');
-      return { tag: 'num', v: ((a % b) + b) % b };
-    // `div` is whole division and `/` is not, which is the distinction SML
-    // makes between int and real and this build cannot make in its types.
+      return { tag: 'int', v: ((a % b) + b) % b };
     case 'DIV':
+      if (tag !== 'int') throw new RonmlError('div is for whole numbers. For reals use /');
       if (b === 0) throw new RonmlError('div by zero');
-      return { tag: 'num', v: Math.floor(a / b) };
+      return { tag: 'int', v: Math.floor(a / b) };
     case 'LT': return { tag: 'bool', v: a < b };
     case 'GT': return { tag: 'bool', v: a > b };
     case 'LE': return { tag: 'bool', v: a <= b };
@@ -1583,7 +1642,13 @@ function applyBinOp(op, l, r) {
 function evalNode(node, env, ctx, builtins) {
   if (++STEPS > FUEL) throw new RonmlFuelError('step budget exceeded');
   switch (node.type) {
-    case 'Lit': return { tag: 'num', v: node.value };
+    case 'Lit': return { tag: node.real ? 'real' : 'int', v: node.value };
+    case 'CharLit': return { tag: 'char', v: node.value };
+    case 'Neg': {
+      const x = evalNode(node.arg, env, ctx, builtins);
+      if (!x || (x.tag !== 'int' && x.tag !== 'real')) throw new RonmlError(`${describeValue(x)} is not a number`);
+      return { tag: x.tag, v: -x.v };
+    }
     case 'StrLit': return { tag: 'str', v: node.value };
     case 'Lam': return { tag: 'closure', param: node.param, body: node.body, env, ctx, builtins };
     case 'Bin': return applyBinOp(node.op, evalNode(node.left, env, ctx, builtins), evalNode(node.right, env, ctx, builtins));
@@ -1817,7 +1882,8 @@ function matchPattern(pat, v, ctx) {
   switch (pat.p) {
     case 'wild': return {};
     case 'unit': return v && v.tag === 'unit' ? {} : null;
-    case 'num': return v && v.tag === 'num' && v.v === pat.v ? {} : null;
+    case 'num': return v && (v.tag === 'int' || v.tag === 'real') && v.v === pat.v ? {} : null;
+    case 'char': return v && v.tag === 'char' && v.v === pat.v ? {} : null;
     case 'str': return v && v.tag === 'str' && v.v === pat.v ? {} : null;
     case 'bool': return v && v.tag === 'bool' && v.v === pat.v ? {} : null;
     case 'nil': return v && v.tag === 'list' && v.items.length === 0 ? {} : null;
@@ -1832,6 +1898,8 @@ function matchPattern(pat, v, ctx) {
       const m = matchPattern(pat.pat, v, ctx);
       return m ? { ...m, [pat.name]: v } : null;
     }
+    // An annotation is the checker's business, not the matcher's.
+    case 'ann': return matchPattern(pat.pat, v, ctx);
     case 'record': {
       if (!v || v.tag !== 'record') return null;
       const out = {};
@@ -1912,7 +1980,9 @@ function describeValue(v) {
   if (!v) return 'nothing';
   switch (v.tag) {
     case 'unit': return '()';
-    case 'num': return `the number ${v.v}`;
+    case 'int': return `the whole number ${v.v}`;
+    case 'real': return `the real ${v.v}`;
+    case 'char': return `the character ${v.v}`;
     case 'bool': return v.v ? 'true' : 'false';
     case 'node': return `node ${v.id}`;
     case 'key': return v.kind === 'aikey' ? 'the AI key' : 'a key';
@@ -1935,7 +2005,9 @@ function formatValue(v) {
   if (!v) return '()';
   switch (v.tag) {
     case 'unit': return '()';
-    case 'num': return String(v.v);
+    case 'int': return String(v.v);
+    case 'real': return Number.isInteger(v.v) ? `${v.v}.0` : String(v.v);
+    case 'char': return v.v;
     case 'bool': return v.v ? 'true' : 'false';
     case 'str': return v.v;
     case 'node': return v.id;
@@ -2140,7 +2212,7 @@ function helpText(topic, station, hasManual) {
 // as the `map` verb, and `*crash OB k` would pass a literal `k`, not a binding.
 function litTokenToValue(t) {
   if (t.t === 'STR') return { tag: 'str', v: t.v };
-  if (t.t === 'NUM') return { tag: 'num', v: t.v };
+  if (t.t === 'NUM') return { tag: 'int', v: t.v };
   if (t.t === 'IDENT') return /\.(ml|md)$/i.test(t.v) ? { tag: 'file', name: t.v } : { tag: 'node', id: t.v };
   return { tag: 'node', id: String(t.v ?? t.t) };
 }
@@ -2241,8 +2313,6 @@ const NOT_FITTED = [
   [/^\s*infix\w*\b|\bop\b/, 'no infix declarations on this build.'],
   [/\bref\b|:=/, 'no mutable references on this build. Nothing here can be assigned to; carry the changing value through the recursion instead.'],
   [/\b(String|List|Int|Real|Char|Array|Vector|IO|TextIO|Option)\./, 'no standard library on this machine. What there is: hd, tl, length, abs, sqrt, min, max, size.'],
-  [/#"/, 'no character type. Use a one-letter string.'],
-  [/~\d/, 'no unary minus. Write (0 - n).'],
 ];
 
 export function diagnose(src) {
@@ -2283,7 +2353,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.0';
+export const AIML_VERSION = '1.1';
 export const AIML_NAME = 'AI-ML';
 
 export function aimlVersion() {
@@ -2306,7 +2376,10 @@ export function aimlFull() {
   L.push('and inside every machine that runs a program you can read.');
 
   sec('VALUES');
-  row('num', '4, 3.5. One number type, not int and real.');
+  row('int', '4, ~3. div and mod are whole-number.');
+  row('real', '3.5, 2.0. / divides these and not ints.');
+  row('', 'real n and floor x go between them.');
+  row('char', '#"a". ord chr str explode implode.');
   row('str', '"a string". ^ joins two.');
   row('bool', 'true false. and or not, andalso orelse.');
   row('unit', '()');
@@ -2349,12 +2422,10 @@ export function aimlFull() {
   sec('NOT ON THIS BUILD');
   row('functors', 'parameterised structures. Not fitted.');
   row('references', 'no ref, no :=. Nothing can be assigned to.');
-  row('standard library', 'only abs sqrt min max size, and the list verbs.');
-  row('char', 'use a one-letter string.');
+  row('standard library', 'abs sqrt min max size real floor ord chr str');
+  L.push('                            explode implode, and the list verbs. No more.');
   row('infix declarations', 'no infix, no op.');
   row('local', 'use let ... in ... end.');
-  row('unary minus', 'write (0 - n), not ~n.');
-  row('int vs real', 'one number type. div is whole division, / is not.');
 
   sec('WRITTEN DIFFERENTLY');
   row('==  and  =', 'both are equality. A binding eats its = first.');
