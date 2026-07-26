@@ -61,7 +61,11 @@ function tokenize(src) {
     if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }  // cons, as in ML
     if (c === '|' && src[i + 1] === '>') { toks.push({ t: 'PIPE' }); i += 2; continue; }
     if (c === '|') { toks.push({ t: 'BAR' }); i++; continue; }
-    if (c === '@') { toks.push({ t: 'AT' }); i++; continue; }    // list append   // separates datatype constructors and case arms
+    if (c === '@') { toks.push({ t: 'AT' }); i++; continue; }    // list append
+    if (c === '{') { toks.push({ t: 'LC' }); i++; continue; }    // record
+    if (c === '}') { toks.push({ t: 'RC' }); i++; continue; }
+    if (c === '#') { toks.push({ t: 'HASH' }); i++; continue; }  // #label and #1
+    if (c === '.' && src[i + 1] === '.' && src[i + 2] === '.') { toks.push({ t: 'ELLIPSIS' }); i += 3; continue; }   // separates datatype constructors and case arms
     // Comparison operators (two-char forms first). Equality is `==` (bare `=` is
     // reserved for `let`), inequality `!=` or ML's `<>`.
     if (c === '<' && src[i + 1] === '=') { toks.push({ t: 'LE' }); i += 2; continue; }
@@ -141,10 +145,24 @@ function parse(toks) {
   // parameter as `fn x => fn y => …` (the `let f x y = …` sugar does this for you).
   function parseLambda() {
     p++; // 'fn'
-    const param = eat('IDENT');
+    // `fn x => e` is the common case, but ML's fn takes a MATCH: several
+    // alternatives separated by |, which is what makes `fn nil => … | _ => …`
+    // work and what the corpus uses for one-off matchers.
+    const first = parsePattern();
     if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after fn's parameter — try: fn x => x");
     p++;
-    return { type: 'Lam', param: param.v, body: parseExpr() };
+    const arms = [{ pat: first, body: parseExpr1() }];
+    while (peek().t === 'BAR') {
+      p++;
+      const pat = parsePattern();
+      if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after a pattern — try: fn nil => 0 | _ => 1");
+      p++;
+      arms.push({ pat, body: parseExpr1() });
+    }
+    if (arms.length === 1 && first.p === 'name' && !first.args.length) {
+      return { type: 'Lam', param: first.name, body: arms[0].body };
+    }
+    return { type: 'Lam', param: '__fnarg', body: { type: 'Case', subject: { type: 'Var', name: '__fnarg' }, arms } };
   }
 
   // Collect zero+ parameter names sitting between a let-name and its `=`, so
@@ -216,7 +234,7 @@ function parse(toks) {
     const params = [];
     for (;;) {
       if (peek().t === 'IDENT' && !isKeyword(peek(), 'in')) { params.push(eat('IDENT').v); continue; }
-      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'NUM' || peek().t === 'STR') {
+      if (['LP', 'LB', 'LC', 'NUM', 'STR'].includes(peek().t)) {
         params.push({ pat: parsePatternAtom() }); continue;
       }
       break;
@@ -243,11 +261,12 @@ function parse(toks) {
     if (isKeyword(peek(), 'if')) return parseIf();
     if (isKeyword(peek(), 'let')) {
       p++;
+      if (peek().t === 'IDENT' && ['val', 'fun'].includes(peek().v.toLowerCase())) p++;
       // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
       // write down the shape and the parts get names.
-      if (peek().t === 'LP' || peek().t === 'LB') {
+      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC') {
         const pat = parsePatternAtom();
         eat('EQ');
         const value = parseExpr();
@@ -262,9 +281,42 @@ function parse(toks) {
       eat('EQ');
       const first0 = parseExpr();
       const value = clausalRest(nameTok.v, params, first0) || wrapParams(params, first0);
+      // `let a = 1 and b = 2 in …` and `let val a = 1 val b = 2 in … end`.
+      // Several bindings before the `in`, which is how ML writes a local block
+      // and how most of the worked examples in the corpus are shaped.
+      const extra = [];
+      for (;;) {
+        // Only treat `and` as a binding separator when what follows really is
+        // a binding; otherwise `let x = a and b in …` would lose its boolean.
+        const isBind = () => {
+          let q = p + 1;
+          if (!toks[q] || toks[q].t !== 'IDENT') return false;
+          while (toks[q] && (toks[q].t === 'IDENT' || toks[q].t === 'LP' || toks[q].t === 'LB')) q++;
+          return !!toks[q] && toks[q].t === 'EQ';
+        };
+        if ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let')) {
+          p++;
+          const n2 = eat('IDENT');
+          const p2 = letParams();
+          eat('EQ');
+          const b2 = parseExpr();
+          extra.push({ name: n2.v, value: clausalRest(n2.v, p2, b2) || wrapParams(p2, b2) });
+          continue;
+        }
+        break;
+      }
+      if (extra.length) {
+        if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after the bindings");
+        p++;
+        let body = parseExpr();
+        if (isKeyword(peek(), 'end')) p++;
+        for (let k = extra.length - 1; k >= 0; k--) body = { type: 'Let', name: extra[k].name, value: extra[k].value, body };
+        return { type: 'Let', name: nameTok.v, value, body };
+      }
       if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let k = hack OB_XXXX in crash OB_XXXX k");
       p++;
       const body = parseExpr();
+      if (isKeyword(peek(), 'end')) p++;      // SML closes a local block with `end`
       return { type: 'Let', name: nameTok.v, value, body };
     }
     return parsePipe();
@@ -335,6 +387,23 @@ function parse(toks) {
       eat('RB');
       return items.reduceRight((tail, head) => ({ p: 'cons', head, tail }), { p: 'nil' });
     }
+    if (tok.t === 'LC') {
+      p++;
+      const fields = [];
+      let open = false;
+      if (peek().t !== 'RC') {
+        for (;;) {
+          if (peek().t === 'ELLIPSIS') { p++; open = true; break; }
+          const label = eat('IDENT').v;
+          if (peek().t === 'EQ') { p++; fields.push({ label, pat: parsePattern() }); }
+          else fields.push({ label, pat: { p: 'name', name: label, args: [] } });
+          if (peek().t !== 'COMMA') break;
+          p++;
+        }
+      }
+      eat('RC');
+      return { p: 'record', fields, open };
+    }
     if (tok.t === 'LP') {
       p++;
       const first = parsePattern();
@@ -363,6 +432,12 @@ function parse(toks) {
       // own, or `Rect w h` would read as `Rect (w h)` and the constructor would
       // see one argument where it declared two. Nest with parentheses when a
       // sub-pattern really is applied: `Node (Leaf x) r`.
+      // `whole as pattern` names the value AND takes it apart, which the
+      // corpus uses whenever a clause needs both.
+      if (peek().t === 'IDENT' && peek().v.toLowerCase() === 'as') {
+        p++;
+        return { p: 'as', name: v, pat: parsePatternAtom() };
+      }
       const args = [];
       while (peek().t === 'IDENT' || peek().t === 'NUM' || peek().t === 'LP' || peek().t === 'LB') {
         if (peek().t === 'IDENT' && ['of', 'case', 'let', 'in', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod'].includes(peek().v.toLowerCase())) break;
@@ -401,9 +476,22 @@ function parse(toks) {
   // `and` / `or`: loosest of the operators, so a condition reads the way it is
   // spoken — `threat and hurt`. Both SHORT-CIRCUIT, which matters once sensors
   // are functions: `linked and calls_home` must not call home when unlinked.
+  // Is the `and` at position p separating two BINDINGS rather than joining two
+  // conditions? It is if what follows looks like `name … =`.
+  function andIsBinding() {
+    let q = p + 1;
+    if (!toks[q] || toks[q].t !== 'IDENT') return false;
+    while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
+    return !!toks[q] && toks[q].t === 'EQ';
+  }
+
   function parseBool() {
     let left = parseCompare();
-    while (peek().t === 'IDENT' && (peek().v.toLowerCase() === 'and' || peek().v.toLowerCase() === 'or')) {
+    // `and` is both boolean conjunction and the separator between simultaneous
+    // bindings. Take it as boolean only when what follows is not a binding, or
+    // `let a = 1 and b = 2 in …` swallows the second name and then trips on =.
+    while (peek().t === 'IDENT' && (peek().v.toLowerCase() === 'or'
+      || (peek().v.toLowerCase() === 'and' && !andIsBinding()))) {
       const op = toks[p++].v.toLowerCase();
       left = { type: 'Bool', op, left, right: parseCompare() };
     }
@@ -460,8 +548,8 @@ function parse(toks) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
-    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun'].includes(tok.v.toLowerCase())) return false;
-    return tok.t === 'NUM' || tok.t === 'STR' || tok.t === 'IDENT' || tok.t === 'LP' || tok.t === 'LB';
+    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end'].includes(tok.v.toLowerCase())) return false;
+    return tok.t === 'NUM' || tok.t === 'STR' || tok.t === 'IDENT' || tok.t === 'LP' || tok.t === 'LB' || tok.t === 'LC' || tok.t === 'HASH';
   }
 
   function parseApp() {
@@ -495,6 +583,29 @@ function parse(toks) {
       }
       eat('RP');
       return e;
+    }
+    // { a = 1, b = 2 } — a record: named fields rather than positions. The
+    // shorthand { a, b } means { a = a, b = b }, as it does in ML.
+    if (tok.t === 'LC') {
+      p++;
+      const fields = [];
+      if (peek().t !== 'RC') {
+        for (;;) {
+          const label = eat('IDENT').v;
+          if (peek().t === 'EQ') { p++; fields.push({ label, value: parseExpr() }); }
+          else fields.push({ label, value: { type: 'Var', name: label } });
+          if (peek().t !== 'COMMA') break;
+          p++;
+        }
+      }
+      eat('RC');
+      return { type: 'Record', fields };
+    }
+    // #label r selects a field; #1 p selects from a tuple, counting from one.
+    if (tok.t === 'HASH') {
+      p++;
+      const sel = peek().t === 'NUM' ? String(eat('NUM').v) : eat('IDENT').v;
+      return { type: 'Select', label: sel };
     }
     if (tok.t === 'LB') {
       p++;
@@ -555,11 +666,12 @@ function parse(toks) {
     }
     if (isKeyword(peek(), 'let')) {
       p++;
+      if (peek().t === 'IDENT' && ['val', 'fun'].includes(peek().v.toLowerCase())) p++;
       // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
       // write down the shape and the parts get names.
-      if (peek().t === 'LP' || peek().t === 'LB') {
+      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC') {
         const pat = parsePatternAtom();
         eat('EQ');
         const value = parseExpr();
@@ -574,11 +686,31 @@ function parse(toks) {
       eat('EQ');
       const first = parseExpr();
       const value = clausalRest(nameTok.v, params, first) || wrapParams(params, first);
+      // Several bindings before the `in`: `let val m = 3 val n = 4 in m+n end`
+      // and `let a = 1 and b = 2 in a+b`. `end` closes the block if it is there.
+      const extra = [];
+      const isBind = () => {
+        let q = p + 1;
+        if (!toks[q] || toks[q].t !== 'IDENT') return false;
+        while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
+        return !!toks[q] && toks[q].t === 'EQ';
+      };
+      while ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let')) {
+        p++;
+        const n2 = eat('IDENT');
+        const p2 = letParams();
+        eat('EQ');
+        const b2 = parseExpr();
+        extra.push({ name: n2.v, value: clausalRest(n2.v, p2, b2) || wrapParams(p2, b2) });
+      }
       if (isKeyword(peek(), 'in')) {
         p++;
-        const body = parseExpr();
+        let body = parseExpr();
+        if (isKeyword(peek(), 'end')) p++;
+        for (let k = extra.length - 1; k >= 0; k--) body = { type: 'Let', name: extra[k].name, value: extra[k].value, body };
         return { type: 'Let', name: nameTok.v, value, body };
       }
+      if (extra.length) throw new RonmlError("expected 'in' after the bindings");
       return { type: 'TopLet', name: nameTok.v, value };
     }
     return parseExpr();
@@ -793,6 +925,14 @@ function makeBuiltins(station) {
     // station's, so a robot's program can use them with no network at all.
     // Deliberately not `map`/`filter`: with recursion these are enough to
     // write those yourself, which is the sort of thing this machine is for.
+    // ---- the little that stands in for a standard library ------------
+    // A machine with no floating-point unit and no printer does not get one,
+    // but these five come up in every worked example and cost nothing.
+    abs: { arity: 1, fn: ([n]) => { if (!n || n.tag !== 'num') throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'num', v: Math.abs(n.v) }; } },
+    sqrt: { arity: 1, fn: ([n]) => { if (!n || n.tag !== 'num') throw new RonmlError(`${describeValue(n)} is not a number`); if (n.v < 0) throw new RonmlError('sqrt of a negative'); return { tag: 'num', v: Math.sqrt(n.v) }; } },
+    min: { arity: 2, fn: ([a, b]) => { if (!a || a.tag !== 'num' || !b || b.tag !== 'num') throw new RonmlError('min needs two numbers'); return { tag: 'num', v: Math.min(a.v, b.v) }; } },
+    max: { arity: 2, fn: ([a, b]) => { if (!a || a.tag !== 'num' || !b || b.tag !== 'num') throw new RonmlError('max needs two numbers'); return { tag: 'num', v: Math.max(a.v, b.v) }; } },
+    size: { arity: 1, fn: ([x]) => { if (x && x.tag === 'str') return { tag: 'num', v: x.v.length }; if (x && x.tag === 'list') return { tag: 'num', v: x.items.length }; throw new RonmlError(`${describeValue(x)} has no size`); } },
     hd: {
       arity: 1,
       fn: ([l]) => {
@@ -1131,7 +1271,7 @@ const HERMES_VERBS = ['read', 'archive', 'records', 'drive', 'backup', 'restore'
 // arithmetic / `;` / recursion), which is exactly what makes it a place to LEARN
 // the language rather than perform it under fire. A tower verb typed here is not a
 // typo, it is a machine that isn't listening: evalNode says so and points at a tower.
-const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length'];
+const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size'];
 // A MACHINE'S OWN STATION. Its program runs here: senses in, an intent out, and
 // nothing else within reach — no network, no files, no console verbs. That is
 // not a restriction bolted on, it is what a unit actually has.
@@ -1139,7 +1279,7 @@ const LAPTOP_VERBS = ['echo', 'not', 'hd', 'tl', 'length'];
 // not the machine's, so they are listed here but stay neutral elsewhere.
 const MACHINE_ONLY = ['charge', 'integrity', 'range', 'home_range',
   'threat', 'hurt', 'linked', 'blight', 'daylight', 'beep', 'eye', 'flash'];
-const ROBOT_VERBS = [...MACHINE_ONLY, 'not', 'echo', 'hd', 'tl', 'length'];
+const ROBOT_VERBS = [...MACHINE_ONLY, 'not', 'echo', 'hd', 'tl', 'length', 'abs', 'sqrt', 'min', 'max', 'size'];
 // Retired verbs kept only so typing one gives a clean "not a command" instead
 // of a cryptic node error (make/ping were removed when TORs became info-only).
 const RETIRED_VERBS = ['make', 'ping'];
@@ -1172,6 +1312,19 @@ function applyValue(fnVal, argVal) {
   // it has them all, at which point it stops being one and becomes a value.
   // This is Harper's point about constructors: they build, and building is the
   // only thing they do.
+  if (fnVal && fnVal.tag === 'select') {
+    const l = fnVal.label;
+    if (argVal && argVal.tag === 'record') {
+      if (!Object.prototype.hasOwnProperty.call(argVal.fields, l)) throw new RonmlError(`no field ${l} in this record`);
+      return argVal.fields[l];
+    }
+    if (argVal && argVal.tag === 'tuple') {
+      const i = Number(l);
+      if (!Number.isInteger(i) || i < 1 || i > argVal.items.length) throw new RonmlError(`a tuple of ${argVal.items.length} has no #${l}`);
+      return argVal.items[i - 1];
+    }
+    throw new RonmlError(`${describeValue(argVal)} has no fields`);
+  }
   if (fnVal && fnVal.tag === 'confn') {
     const args = [...fnVal.args, argVal];
     return args.length >= fnVal.arity
@@ -1279,6 +1432,14 @@ function evalNode(node, env, ctx, builtins) {
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    case 'Record': {
+      const fields = {};
+      for (const f of node.fields) fields[f.label] = evalNode(f.value, env, ctx, builtins);
+      return { tag: 'record', fields };
+    }
+    // #label and #1 are functions, not syntax, so they may be passed around:
+    // `map #name people` works because #name is a value like any other.
+    case 'Select': return { tag: 'select', label: node.label };
 
     // Declaring a datatype puts its constructors where names are looked up.
     // A nullary one IS a value; one that takes arguments is a function that
@@ -1406,6 +1567,23 @@ function matchPattern(pat, v, ctx) {
       const t = matchPattern(pat.tail, { tag: 'list', items: v.items.slice(1) }, ctx);
       return t ? { ...h, ...t } : null;
     }
+    case 'as': {
+      const m = matchPattern(pat.pat, v, ctx);
+      return m ? { ...m, [pat.name]: v } : null;
+    }
+    case 'record': {
+      if (!v || v.tag !== 'record') return null;
+      const out = {};
+      for (const f of pat.fields) {
+        if (!Object.prototype.hasOwnProperty.call(v.fields, f.label)) return null;
+        const m = matchPattern(f.pat, v.fields[f.label], ctx);
+        if (!m) return null;
+        Object.assign(out, m);
+      }
+      // Without `...` the pattern must account for every field, as in ML.
+      if (!pat.open && Object.keys(v.fields).length !== pat.fields.length) return null;
+      return out;
+    }
     case 'tuple': {
       if (!v || v.tag !== 'tuple' || v.items.length !== pat.items.length) return null;
       const out = {};
@@ -1449,6 +1627,8 @@ function describeValue(v) {
     case 'file': return `the file ${v.name}`;
     case 'list': return 'a list';
     case 'tuple': return `a tuple of ${v.items.length}`;
+    case 'record': return `a record of {${Object.keys(v.fields).join(', ')}}`;
+    case 'select': return `#${v.label}`;
     case 'con': return `${v.name}`;
     case 'confn': return `${v.name} (needs ${v.arity - v.args.length} more)`;
     case 'datatype': return `the type ${v.name}`;
@@ -1471,6 +1651,8 @@ function formatValue(v) {
     case 'file': return v.name;
     case 'list': return '[' + v.items.map(formatValue).join(', ') + ']';
     case 'tuple': return '(' + v.items.map(formatValue).join(', ') + ')';
+    case 'record': return '{' + Object.keys(v.fields).map((k) => `${k} = ${formatValue(v.fields[k])}`).join(', ') + '}';
+    case 'select': return `#${v.label}`;
     // A constructor's arguments are parenthesised when they are themselves
     // constructors carrying something, or `Plus (Chr "a") (Chr "b")` prints as
     // `Plus Chr a Chr b`, which reads as four arguments and is not what it is.
@@ -1740,6 +1922,25 @@ export function decide(program, sense, opts = {}) {
     return { ok: false, fault: `'${r.text}' is not something this unit can do`, effects };
   }
   return { ok: true, intent, effects };
+}
+
+
+// Join the physical lines of a program file into the logical ones the parser
+// expects. A line continues the previous one when it is indented or opens with
+// an operator that cannot start a declaration — which is how ML is written, and
+// how every worked example in every manual is laid out. Without this, a file
+// could only hold one-liners, and every multi-line function in the demos and in
+// Harper's corpus failed on its second line.
+export function joinProgramLines(text) {
+  const out = [];
+  for (const raw of String(text).split('\n')) {
+    const line = raw.replace(/\(\*.*?\*\)/g, '').replace(/\s+$/, '');
+    if (!line.trim()) { continue; }
+    const continues = /^\s/.test(raw) || /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(line);
+    if (continues && out.length) out[out.length - 1] += ` ${line.trim()}`;
+    else out.push(line.trim());
+  }
+  return out;
 }
 
 export function runRonml(source, ctx) {
