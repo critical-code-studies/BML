@@ -29,20 +29,112 @@
 import { runRonml } from '../src/game/ai_ml.js';
 import fs from 'fs';
 
-// Split SML source into top-level declarations. Crude but adequate: a new
-// declaration starts at column 0 with one of these words.
-function decls(src) {
-  src = src.replace(/\(\*[\s\S]*?\*\)/g, '');            // strip comments
-  const lines = src.split('\n');
-  const out = []; let cur = [];
-  for (const l of lines) {
-    if (/^(fun|val|datatype|type|exception|local|in|end|structure|signature|functor|infix|open|abstype)\b/.test(l) && cur.length) {
-      out.push(cur.join('\n')); cur = [l];
-    } else if (l.trim()) cur.push(l);
-    else if (cur.length) { out.push(cur.join('\n')); cur = []; }
+// ---- Splitting source into top-level declarations --------------------------
+//
+// This is the part of the harness most likely to be wrong, and it has been:
+// the version before this one split at column 0 on a keyword list that INCLUDED
+// `in` and `end`, so every `local … in … end` and every `structure S = struct
+// … end` was cut into two or three fragments, each of which then failed to
+// parse on its own. It also ended a declaration at any blank line, and stripped
+// comments with a non-greedy regex that cannot see SML's NESTED comments.
+// Together that accounted for roughly a quarter of all reported failures, and
+// every one of them looked like a language gap.
+//
+// The rule now: a declaration ends only at nesting depth zero.
+
+const OPENERS = new Set(['let', 'local', 'struct', 'sig', 'abstype']);
+const STARTERS = new Set(['fun', 'val', 'datatype', 'type', 'exception', 'local',
+  'structure', 'signature', 'functor', 'infix', 'infixr', 'nonfix', 'open',
+  'abstype', 'withtype']);
+
+// Blank out comments and string bodies, preserving length and line breaks, so
+// that line- and word-based logic afterwards cannot be fooled by a keyword
+// inside a comment or a quoted string. SML comments nest, so this counts depth
+// rather than matching a first `*)`.
+function mask(src) {
+  const out = src.split('');
+  let depth = 0, inStr = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i], d = src[i + 1];
+    if (depth > 0) {
+      if (c === '(' && d === '*') { depth++; out[i] = out[i + 1] = ' '; i++; continue; }
+      if (c === '*' && d === ')') { depth--; out[i] = out[i + 1] = ' '; i++; continue; }
+      if (c !== '\n') out[i] = ' ';
+      continue;
+    }
+    if (inStr) {
+      if (c === '\\') { out[i] = ' '; if (d !== undefined && d !== '\n') { out[i + 1] = ' '; i++; } continue; }
+      if (c === '"') { inStr = false; out[i] = ' '; continue; }
+      if (c !== '\n') out[i] = ' ';
+      continue;
+    }
+    if (c === '(' && d === '*') { depth++; out[i] = out[i + 1] = ' '; i++; continue; }
+    if (c === '"') { inStr = true; out[i] = ' '; continue; }
   }
-  if (cur.length) out.push(cur.join('\n'));
-  return out.map((d) => d.trim()).filter(Boolean);
+  return out.join('');
+}
+
+// How far a line moves the block nesting: openers up, `end` down. Counted over
+// words only, on the masked text.
+function depthDelta(maskedLine) {
+  let d = 0;
+  for (const w of maskedLine.match(/[A-Za-z_'][A-Za-z0-9_']*/g) || []) {
+    if (OPENERS.has(w)) d++;
+    else if (w === 'end') d--;
+  }
+  return d;
+}
+
+export function decls(src) {
+  const lines = src.split('\n');
+  const masked = mask(src).split('\n');
+  const out = [];
+  let cur = [];
+  let depth = 0;
+  const flush = () => { if (cur.length) { out.push(cur.join('\n')); cur = []; } };
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = masked[i];
+    // A new declaration begins only when nothing is open: inside a `struct` the
+    // word `fun` starts a member, not a top-level declaration.
+    const startsDecl = depth === 0
+      && /^[A-Za-z]/.test(m)
+      && STARTERS.has((m.match(/^[A-Za-z_'][A-Za-z0-9_']*/) || [''])[0]);
+    if (startsDecl) flush();
+    if (m.trim()) cur.push(lines[i]);
+    else if (depth === 0) flush();          // a blank line ends a declaration
+    else if (cur.length) cur.push(lines[i]); // …but not one that is still open
+    depth = Math.max(0, depth + depthDelta(m));
+  }
+  flush();
+  // Strip the comments only now, for the interpreter's benefit, and drop any
+  // fragment that was nothing but a comment.
+  return out
+    .map((d) => stripComments(d).trim())
+    .filter(Boolean);
+}
+
+// Comment removal that respects nesting, for the text actually handed over.
+function stripComments(src) {
+  let out = '', depth = 0, inStr = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i], d = src[i + 1];
+    if (depth > 0) {
+      if (c === '(' && d === '*') { depth++; i++; continue; }
+      if (c === '*' && d === ')') { depth--; i++; continue; }
+      continue;
+    }
+    if (inStr) {
+      out += c;
+      if (c === '\\' && d !== undefined) { out += d; i++; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '(' && d === '*') { depth++; i++; continue; }
+    if (c === '"') inStr = true;
+    out += c;
+  }
+  return out;
 }
 
 // Mechanically translate the parts of SML that AI-ML spells differently.
@@ -52,11 +144,17 @@ function translate(d) {
   let s = d;
   // PRUNE THIS WHENEVER THE LANGUAGE GROWS. It has been out of date after every
   // single addition so far: it went on skipping modules and exceptions after
-  // v1.252 added them, and went on rewriting chars and `~` after v1.255 did.
-  // Each time the score under-reported and the gain was invisible.
-  if (/^(functor|infix|open|abstype|local)\b/.test(s)) return null;
-  if (/\bref\b|:=/.test(s)) return null;                             // mutable cells
-  if (/\b(String|List|Int|Real|Array|Vector|IO|TextIO)\./.test(s)) return null;
+  // v1.252 added them, went on rewriting chars and `~` after v1.255 did, and
+  // was still skipping `local`, `functor`, `ref` and the whole standard library
+  // at v1.273 — all four of which v1.257 had added. Each time the score
+  // under-reported and the gain was invisible.
+  //
+  // Every entry below was re-verified against the interpreter on 2026-07-27 by
+  // running an example of it, not by reading the code. `local`, `functor`,
+  // `ref`/`:=`, and the List/String/Int/Option structures all work and are no
+  // longer skipped.
+  if (/^(infix|infixr|nonfix|open|abstype)\b/.test(s)) return null;  // no fixity, no open, no abstype
+  if (/\b(Char|Real|Word|Array|Vector|IO|TextIO|OS|Math|General|Substring)\./.test(s)) return null;
 
   // Nothing else is rewritten. #"a" is a char here now, ~n is unary minus,
   // annotations are checked, andalso/orelse are spelled as they are in ML, and
@@ -73,6 +171,12 @@ const NAMES = ['ascription', 'clauses', 'concur', 'datatype', 'excs', 'fcnls', '
   'sigstr', 'specs', 'streams', 'strind', 'subfun', 'typinf', 'typval', 'vardec', 'views'];
 const DIR = 'tools/.isml-cache';
 const BASE = 'https://www.cs.cmu.edu/~rwh/isml/examples';
+
+// Only run the survey when invoked as a program. `decls` is exported so a test
+// can check the splitter without fetching a corpus or running an interpreter —
+// which is the point: the instrument gets tested like anything else now.
+const RUN = import.meta.url === `file://${process.argv[1]}`;
+if (!RUN) { /* imported for `decls` */ } else {
 
 if (!fs.existsSync(DIR)) fs.mkdirSync(DIR, { recursive: true });
 for (const n of NAMES) {
@@ -117,6 +221,8 @@ for (const r of report) {
 const T = report.reduce((a, r) => ({ a: a.a + r.attempted, o: a.o + r.ok, s: a.s + r.skipped }), { a: 0, o: 0, s: 0 });
 console.log(`\nTOTAL attempted ${T.a}, ran ${T.o} (${Math.round(T.o / T.a * 100)}%), skipped as out-of-scope ${T.s}`);
 
-console.log('\nThe skipped ones are the documented absences: modules, exceptions,');
-console.log('mutable references, the standard library. See the Restrictions page in');
-console.log('the game, and docs/ob-terminal-language.md.');
+console.log('\nThe skipped ones are the remaining documented absences: infix/nonfix,');
+console.log('open, abstype, and the Basis structures beyond List/String/Int/Option.');
+console.log('See the Restrictions page in the game, and docs/ob-terminal-language.md.');
+
+}
