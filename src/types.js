@@ -38,6 +38,7 @@ export const UNIT = con('unit');
 export const listOf = (t) => con('list', [t]);
 export const fnOf = (a, b) => con('->', [a, b]);
 export const tupleOf = (ts) => con('*', ts);
+export const refOf = (t) => con('ref', [t]);
 
 // Follow a variable to whatever it has been bound to. Everything below assumes
 // its inputs have been pruned, which is why almost every function starts here.
@@ -99,6 +100,25 @@ function envFree(env) {
     for (const id of freeVars(s.type)) if (!bound.has(id)) out.add(id);
   }
   return out;
+}
+
+// THE VALUE RESTRICTION. Standard ML generalises a binding only when its
+// right-hand side is a syntactic value: a literal, a variable, a lambda, or a
+// constructor applied to values. An application is not one, so `val r = ref nil`
+// keeps its type variable un-generalised and cannot be used at two types. Without
+// this rule the reported type of a cell is a lie: it would say `'a list ref` and
+// then let you put an int in and take a string out.
+function isSyntacticValue(node) {
+  if (!node) return false;
+  switch (node.type) {
+    case 'Lit': case 'StrLit': case 'CharLit': case 'Unit':
+    case 'Var': case 'Lam':
+      return true;
+    case 'Tuple': return (node.items || []).every(isSyntacticValue);
+    case 'ListLit': return (node.items || []).every(isSyntacticValue);
+    case 'Record': return (node.fields || []).every((f) => isSyntacticValue(f.value));
+    default: return false;   // App, Deref, Assign, If, Case, Let: not values
+  }
 }
 
 function generalise(env, t) {
@@ -178,10 +198,50 @@ function baseEnv() {
     implode: mono(fnOf(listOf(CHAR), STR)),
     size: scheme([b.id], fnOf(b, NUM)),
     echo: scheme([b.id], fnOf(b, UNIT)),
+    // A cell. `ref` makes one, `!` reads it, `:=` writes it — the three of them
+    // are the only way anything in this language changes, so they are worth
+    // typing properly rather than leaving as "anything".
+    ref: scheme([a.id], fnOf(a, refOf(a))),
   };
 }
 
 // ---- inference -------------------------------------------------------------
+
+// EXHAUSTIVENESS. A case that does not cover every shape its subject can take is
+// a program with a hole in it, and the hole only shows when the value that falls
+// through it turns up. On a machine that is a unit standing in a field with an
+// amber lamp; on this laptop it is a line of warning while you can still do
+// something about it. Standard ML reports the same thing at compile time.
+//
+// An arm that is a wildcard or a plain variable catches everything, so any case
+// with one of those is exhaustive whatever else it has.
+function checkExhaustive(subject, arms, cons) {
+  const irrefutable = (p) => p.p === 'wild'
+    || (p.p === 'name' && !p.args.length && !cons[p.name] && !/^[A-Z]/.test(p.name));
+  if (arms.some((a) => irrefutable(a.pat))) return;
+
+  const t = prune(subject);
+  if (t.k !== 'con') return;             // unknown shape: nothing to say
+
+  if (t.name === 'list') {
+    const hasNil = arms.some((a) => a.pat.p === 'nil');
+    const hasCons = arms.some((a) => a.pat.p === 'cons');
+    if (hasNil && !hasCons) WARNINGS.push('this case does not cover a non-empty list');
+    else if (hasCons && !hasNil) WARNINGS.push('this case does not cover nil');
+    return;
+  }
+
+  const all = (CURRENT_DATACONS || {})[t.name];
+  if (!all || !all.length) return;
+  const covered = new Set(arms.map((a) => (a.pat.p === 'name' ? a.pat.name : null)).filter(Boolean));
+  const missing = all.filter((c) => !covered.has(c));
+  if (missing.length) {
+    WARNINGS.push(`this case does not cover ${missing.join(', ')}`);
+  }
+}
+
+// The datatype-to-constructors map for the line being inferred. Set by typeOf.
+let CURRENT_DATACONS = {};
 
 function inferPattern(pat, binds, cons) {
   switch (pat.p) {
@@ -342,6 +402,20 @@ export function infer(node, env, cons) {
     }
 
     case 'Tuple': return tupleOf(node.items.map((i) => infer(i, env, cons)));
+    // !r : 'a  where r : 'a ref
+    case 'Deref': {
+      const inner = fresh();
+      unify(infer(node.arg, env, cons), refOf(inner));
+      return inner;
+    }
+    // r := v : unit  where r : 'a ref and v : 'a. The result is unit, which is
+    // what makes `r := 1 ; !r` a sequence rather than a mistake.
+    case 'Assign': {
+      const inner = fresh();
+      unify(infer(node.target, env, cons), refOf(inner));
+      unify(infer(node.value, env, cons), inner);
+      return UNIT;
+    }
 
     case 'Record':
       return recordOf(node.fields.map((f) => f.label),
@@ -364,6 +438,10 @@ export function infer(node, env, cons) {
         for (const k of Object.keys(binds)) env2[k] = mono(binds[k]);
         unify(infer(arm.body, env2, cons), result);
       }
+      // AFTER the arms, not before: until a pattern has been unified with it the
+      // subject is still an unbound variable, and there is nothing to be
+      // exhaustive over.
+      checkExhaustive(subject, node.arms, cons);
       return result;
     }
 
@@ -444,15 +522,22 @@ export function fromAnnotation(a, vars) {
 // Infers the type of one parsed line against a session. Returns the type as a
 // string, or the clash as one. Never throws: a report that can crash the
 // console it is reporting to is not a report.
+// Warnings raised while inferring the current line. A module-level list because
+// inference is a recursive walk and threading a collector through every case
+// would cost more than it is worth for one advisory message.
+let WARNINGS = [];
+
 export function typeOf(ast, session = {}) {
+  WARNINGS = [];
   const env = { ...baseEnv() };
   const cons = {};
   const reg = session.__types || {};
   for (const k of Object.keys(reg)) env[k] = reg[k];
   for (const k of Object.keys(session.__contypes || {})) cons[k] = session.__contypes[k];
+  CURRENT_DATACONS = session.__datacons || {};
   try {
     const t = infer(ast, env, cons);
-    return { ok: true, type: show(t), t };
+    return { ok: true, type: show(t), t, warnings: WARNINGS.slice() };
   } catch (e) {
     if (e instanceof TypeError_) return { ok: false, error: e.message };
     return { ok: false, error: null };     // a gap in this module, not in the code
@@ -465,9 +550,17 @@ export function remember(ast, session, t) {
   if (!session.__types) session.__types = {};
   if (!session.__contypes) session.__contypes = {};
   if (ast.type === 'TopLet') {
-    session.__types[ast.name.toLowerCase()] = generalise({}, t);
+    // `fun f x = ...` is a lambda and generalises; `val r = ref nil` is an
+    // application and does not.
+    session.__types[ast.name.toLowerCase()] = isSyntacticValue(ast.value)
+      ? generalise({}, t)
+      : mono(t);
   } else if (ast.type === 'Datatype') {
     const self = con(ast.name);
+    if (!session.__datacons) session.__datacons = {};
+    // Which constructors make up this type, in declared order. The exhaustiveness
+    // check needs the whole set, and nothing else records it.
+    session.__datacons[ast.name] = ast.cons.map((c) => c.name);
     for (const c of ast.cons) {
       let ty = self;
       for (let i = 0; i < c.arity; i++) ty = fnOf(fresh(), ty);

@@ -1680,7 +1680,31 @@ function valuesEqual(a, b) {
     case 'key': return a.kind === b.kind && a.id === b.id;
     case 'file': return a.name === b.name;
     case 'unit': return true;
+    // A record is equal when it has the same labels and equal values under
+    // each. Field order is not part of a record, so compare by label.
+    case 'record': {
+      const ka = Object.keys(a.fields || {}), kb = Object.keys(b.fields || {});
+      if (ka.length !== kb.length) return false;
+      return ka.every((k) => k in (b.fields || {}) && valuesEqual(a.fields[k], b.fields[k]));
+    }
+    // A ref is equal to itself and to nothing else. Two cells holding the same
+    // value are two cells: that is the whole point of having a cell, and it is
+    // what Standard ML compares. `cell` is the identity.
+    case 'ref': return a.cell === b.cell;
     default: return false;
+  }
+}
+
+// Standard ML restricts `=` to EQUALITY TYPES, and a function is not one: `f = g`
+// there is a type error, not a false. This build cannot say so in the type
+// system, because the checker reports and does not refuse, so it says so at the
+// point of comparison instead. Answering `false` when a function is compared
+// with itself is the worse outcome, because nothing tells you it happened.
+function equalityChecked(v, other) {
+  for (const x of [v, other]) {
+    if (x && (x.tag === 'fn' || x.tag === 'closure' || x.tag === 'builtin')) {
+      throw new RonmlError('functions cannot be compared — there is no equality on functions');
+    }
   }
 }
 
@@ -1688,8 +1712,8 @@ function valuesEqual(a, b) {
 // concatenates any two values as text; `==`/`!=` work on any pair.
 function applyBinOp(op, l, r) {
   if (op === 'CARET') return { tag: 'str', v: formatValue(l) + formatValue(r) };
-  if (op === 'EQEQ') return { tag: 'bool', v: valuesEqual(l, r) };
-  if (op === 'NE') return { tag: 'bool', v: !valuesEqual(l, r) };
+  if (op === 'EQEQ') { equalityChecked(l, r); return { tag: 'bool', v: valuesEqual(l, r) }; }
+  if (op === 'NE') { equalityChecked(l, r); return { tag: 'bool', v: !valuesEqual(l, r) }; }
 
   // int and real are separate types now, as they are in ML, and the operators
   // divide along the same line: div and mod are whole-number, / is not. There
@@ -2580,6 +2604,9 @@ export function typeReport(source, ctx) {
     const r = typeOf(ast, ctx.session || {});
     if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
     remember(ast, ctx.session || {}, r.t);
+    // A warning rides alongside the type rather than replacing it: the line is
+    // well typed and also has a hole in it, and you want to be told both.
+    if (r.warnings && r.warnings.length) return `${r.type}    WARNING: ${r.warnings.join('; ')}`;
     return r.type;
   } catch {
     return null;         // unparseable is the parser's business, not this one's
@@ -2592,7 +2619,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.4';
+export const AIML_VERSION = '1.5';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
@@ -2703,6 +2730,15 @@ export function aimlFull() {
   L.push('  feet: patrol hunt flee home tend wait   weapon: fire hold reload');
   L.push('  senses: charge integrity range home_range threat hurt linked');
   L.push('          blight daylight sight armed shielded contact lost_for');
+  L.push('');
+  sec('WHAT THE CHECKER DOES');
+  L.push('  Hindley-Milner inference: unification, occurs check, let-polymorphism,');
+  L.push('  and the value restriction (an application does not generalise).');
+  L.push('  It reports and does not refuse: a clash names itself and the line');
+  L.push('  still runs. A `case` that misses a constructor is a WARNING beside');
+  L.push('  the type, which is the one worth having before you post a program.');
+  L.push('  Equality is structural on records and lists, by identity on refs,');
+  L.push('  and refused on functions.');
   L.push('');
   L.push('  On THIS machine only: `units` is what the wireless card can hear —');
   L.push('  a list of records with name, range, bearing and kind. See sniffer.ml.');
