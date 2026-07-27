@@ -2684,7 +2684,7 @@ export function aimlFull() {
   L.push('  It is written in AI-ML, not underneath it. `ml -src List` prints it.');
 
   sec('NOT ON THIS BUILD');
-  row('infix declarations', 'no infix, no op. The one real gap left.');
+  row('infix declarations', 'no infix, no op.');
   row('the rest of the library', 'no Array, Vector, IO, Real beyond sqrt.');
 
   sec('WRITTEN DIFFERENTLY');
