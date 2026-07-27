@@ -2609,7 +2609,7 @@ export function aimlVersion() {
   return [
     `${AIML_NAME} ${AIML_VERSION}  (RON build)`,
     'A descendant of Standard ML. Type inference, modules, exceptions.',
-    'ml -full  for what is here and what is not.',
+    'ml -full  for full details about this implementation.',
     '',
     ...AIML_CREDIT,
   ].join('\n');
