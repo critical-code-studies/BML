@@ -2601,7 +2601,7 @@ export const AIML_CREDIT = [
   'AI-ML created by David M. Berry, 2026.',
   'Based on Standard ML developed by Robin Milner, Mads Tofte, and',
   'Robert Harper. Many thanks to Robert Harper for the inspiration in',
-  'his book "Introduction to Standard ML" (1986), and to \u00c5ke Wikstr\u00f6m for',
+  'his book "Introduction to Standard ML" (1986), and to Ake Wikstrom for',
   '"Functional Programming Using Standard ML" (1987).',
 ];
 
