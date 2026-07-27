@@ -2595,11 +2595,22 @@ export function typeReport(source, ctx) {
 export const AIML_VERSION = '1.4';
 export const AIML_NAME = 'AI-ML';
 
+// THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
+// two can never drift apart. Also shown in the game's About box.
+export const AIML_CREDIT = [
+  'AI-ML created by David M. Berry, 2026.',
+  'Based on Standard ML developed by Robin Milner, Mads Tofte, and',
+  'Robert Harper. Many thanks to Robert Harper for the inspiration in',
+  'his book "Introduction to Standard ML" (1986).',
+];
+
 export function aimlVersion() {
   return [
     `${AIML_NAME} ${AIML_VERSION}  (RON build)`,
     'A descendant of Standard ML. Type inference, modules, exceptions.',
     'ml -full  for what is here and what is not.',
+    '',
+    ...AIML_CREDIT,
   ].join('\n');
 }
 
@@ -2694,6 +2705,8 @@ export function aimlFull() {
   L.push('');
   L.push('  On THIS machine only: `units` is what the wireless card can hear —');
   L.push('  a list of records with name, range, bearing and kind. See sniffer.ml.');
+  sec('CREDITS');
+  for (const l of AIML_CREDIT) L.push(`  ${l}`);
 
   return L.join('\n');
 }
