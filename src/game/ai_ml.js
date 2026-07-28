@@ -412,7 +412,13 @@ function parse(toks, fixityIn) {
         const value = parseExpr();
         if (isKeyword(peek(), 'in')) {
           p++;
-          return { type: 'LetPat', pat, value, body: parseExpr() };
+          const body = parseExpr();
+          // …and its `end`, which the name-binding path already ate. Without
+          // this, `let val (d, a, b) = … in … end` parsed to the body and then
+          // reported the `end` as unexpected — which reads as a broken `let`
+          // rather than a missing two lines here.
+          if (isKeyword(peek(), 'end')) p++;
+          return { type: 'LetPat', pat, value, body };
         }
         return { type: 'TopLetPat', pat, value };
       }
@@ -1077,19 +1083,13 @@ function parse(toks, fixityIn) {
       for (;;) {
         const c = eat('IDENT');
         let arity = 0;
-        if (isKeyword(peek(), 'of')) {
-          p++;
-          arity = 1;
-          // Skip the type expression, counting * separators. A type here is a
-          // run of identifiers; nothing else may appear.
-          eat('IDENT');
-          while (peek().t === 'IDENT' && !isKeyword(peek(), 'of')) p++;   // `'a tree` is two words, one type
-          while (peek().t === 'STAR') {
-            p++; arity++;
-            eat('IDENT');
-            while (peek().t === 'IDENT' && !isKeyword(peek(), 'of')) p++;
-          }
-        }
+        // The constructor's argument type, read only for how many components it
+        // has. This used to be a hand-rolled loop that ate any run of
+        // identifiers and stopped only at `of`, so in `datatype t = N of int
+        // val z = 1` it swallowed `val z` and then reported the `=`. Use the
+        // one type skipper, which already knows that a declaration keyword ends
+        // a type — and counts the same `*` separators.
+        if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(); }
         cons.push({ name: c.v, arity });
         if (peek().t !== 'BAR') break;
         p++;
@@ -1109,7 +1109,13 @@ function parse(toks, fixityIn) {
         const value = parseExpr();
         if (isKeyword(peek(), 'in')) {
           p++;
-          return { type: 'LetPat', pat, value, body: parseExpr() };
+          const body = parseExpr();
+          // …and its `end`, which the name-binding path already ate. Without
+          // this, `let val (d, a, b) = … in … end` parsed to the body and then
+          // reported the `end` as unexpected — which reads as a broken `let`
+          // rather than a missing two lines here.
+          if (isKeyword(peek(), 'end')) p++;
+          return { type: 'LetPat', pat, value, body };
         }
         return { type: 'TopLetPat', pat, value };
       }
@@ -2832,7 +2838,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '2.0';
+export const AIML_VERSION = '2.1';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
