@@ -1863,6 +1863,17 @@ function applyValue(fnVal, argVal) {
     throw new RonmlError(`${describeValue(argVal)} has no fields`);
   }
   if (fnVal && fnVal.tag === 'confn') {
+    // `datatype p = P of int * int` declares ONE argument that is a pair, and
+    // Standard ML writes it `P (1, 2)`. This build counts the `*` separators and
+    // curries, so it writes `P 1 2` — which is what the in-game documentation
+    // teaches and what the demos use. Accept both: a tuple of exactly the right
+    // width completes the constructor in one go. Without this, `P (1, 2)` stayed
+    // a half-applied constructor and printed as `<P>`, and every one of Harper's
+    // `Node (l, e, r)` was a value that looked like a function.
+    if (!fnVal.args.length && argVal && argVal.tag === 'tuple'
+        && fnVal.arity > 1 && argVal.items.length === fnVal.arity) {
+      return { tag: 'con', name: fnVal.name, args: argVal.items };
+    }
     const args = [...fnVal.args, argVal];
     return args.length >= fnVal.arity
       ? { tag: 'con', name: fnVal.name, args }
@@ -2355,6 +2366,20 @@ function matchPattern(pat, v, ctx) {
       if (cons[pat.name]) {
         if (!v || (v.tag !== 'con' && v.tag !== 'confn') || v.name !== pat.name) return null;
         const got = v.args || [];
+        // `P (a, b)` and `P a b` are both written for a constructor carrying two
+        // things — the first is Standard ML's, the second is what this build's
+        // own documentation teaches. Both match: a single tuple pattern of the
+        // right width is spread across the constructor's arguments.
+        if (pat.args.length === 1 && got.length > 1
+            && pat.args[0].p === 'tuple' && pat.args[0].items.length === got.length) {
+          const out2 = {};
+          for (let i = 0; i < got.length; i++) {
+            const m = matchPattern(pat.args[0].items[i], got[i], ctx);
+            if (!m) return null;
+            Object.assign(out2, m);
+          }
+          return out2;
+        }
         if (pat.args.length !== got.length) return null;
         const out = {};
         for (let i = 0; i < pat.args.length; i++) {
@@ -2432,8 +2457,10 @@ function formatValue(v) {
   if (!v) return '()';
   switch (v.tag) {
     case 'unit': return '()';
-    case 'int': return String(v.v);
-    case 'real': return Number.isInteger(v.v) ? `${v.v}.0` : String(v.v);
+    // Standard ML writes a negative number with a tilde, not a minus: `~3`,
+    // `~1.5`. The minus sign is the binary operator and nothing else.
+    case 'int': return String(v.v).replace(/^-/, '~');
+    case 'real': return (Number.isInteger(v.v) ? `${v.v}.0` : String(v.v)).replace(/^-/, '~');
     case 'char': return v.v;
     case 'bool': return v.v ? 'true' : 'false';
     case 'str': return v.v;
@@ -2451,6 +2478,9 @@ function formatValue(v) {
     case 'con': {
       if (!v.args || !v.args.length) return v.name;
       const arg = (a) => (a && a.tag === 'con' && a.args && a.args.length ? `(${formatValue(a)})` : formatValue(a));
+      // More than one thing carried is one tuple, and Standard ML prints it as
+      // one: `P (1, 2)`, not `P 1 2`. A single argument stays bare.
+      if (v.args.length > 1) return `${v.name} (${v.args.map(formatValue).join(', ')})`;
       return `${v.name} ${v.args.map(arg).join(' ')}`;
     }
     case 'confn': return `<${v.name}>`;
@@ -2852,6 +2882,20 @@ export function loadPrelude(ctx) {
   }
 }
 
+// SML'S TOP-LEVEL ANSWER. Standard ML replies `val it = 7 : int` — the name it
+// bound, the value, and the type. A declaration already names itself (`val f =
+// <fn>`, `datatype t = A | B`), so only a bare expression needs `it` put in
+// front of it. Pure, so the shape can be tested without a terminal to type at.
+const DECLARES = /^(val|fun|datatype|type|exception|signature|structure|functor) /;
+export function smlEcho(text, ty) {
+  if (!text) return [];
+  // No type to show (the checker is off, or it could not say): print as before.
+  if (!ty || ty.startsWith('TYPE:')) return [text];
+  const [tyOnly, warn] = ty.split('    WARNING: ');
+  const line = DECLARES.test(text) ? `${text} : ${tyOnly}` : `val it = ${text} : ${tyOnly}`;
+  return warn ? [line, `  WARNING: ${warn}`] : [line];
+}
+
 export function typeReport(source, ctx) {
   if (!ctx || !ctx.types) return null;
   try {
@@ -2874,7 +2918,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '2.2';
+export const AIML_VERSION = '2.3';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
