@@ -2918,7 +2918,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '2.3';
+export const AIML_VERSION = '2.4';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
@@ -3033,9 +3033,12 @@ export function aimlFull() {
   sec('WHAT THE CHECKER DOES');
   L.push('  Hindley-Milner inference: unification, occurs check, let-polymorphism,');
   L.push('  and the value restriction (an application does not generalise).');
-  L.push('  It reports and does not refuse: a clash names itself and the line');
-  L.push('  still runs. A `case` that misses a constructor is a WARNING beside');
-  L.push('  the type, which is the one worth having before you post a program.');
+  L.push('  Two modes. HERE it reports and does not refuse: a clash names itself');
+  L.push('  and the line still runs, because a machine in a ruin should say what');
+  L.push('  it worked out and let you decide. Strict mode, which the language has');
+  L.push('  outside this game, refuses a line that does not typecheck — which is');
+  L.push('  what makes it an ML. A `case` that misses a constructor is a WARNING');
+  L.push('  under both, as it is in Standard ML.');
   L.push('  Equality is structural on records and lists, by identity on refs,');
   L.push('  and refused on functions.');
   L.push('');
@@ -3087,6 +3090,21 @@ export function runRonml(source, ctx) {
   // without a leading `*` is an AI-ML expression (let / pipes / values / lambdas).
   if (trimmed.startsWith('*')) return runStar(trimmed.slice(1), ctx);
   try {
+    // STRICT MODE. In Standard ML a program that does not typecheck does not
+    // run — that is the whole point of the type system, and until this existed
+    // the honest claim was that AI-ML *infers* types, not that it *is* typed.
+    //
+    // The game stays advisory everywhere (`report`): a machine in a ruin should
+    // say what it worked out and let the operator decide, and a T-1 has neither
+    // a checker nor anyone to read it. `strict` is for the standalone REPL.
+    // Same checker, same message; the only difference is whether the line then
+    // runs. Warnings (exhaustiveness) stay warnings under both.
+    if (ctx && ctx.typecheck === 'strict') {
+      const ty = typeReport(source, { ...ctx, types: true });
+      if (ty && ty.startsWith('TYPE:')) {
+        return { ok: false, text: `ERR: ${ty.slice(6).trim()}` };
+      }
+    }
     const toks = tokenize(source);
     // The session's fixity table, so `infix 8 OR` on an earlier line changes how
     // this one reads.
