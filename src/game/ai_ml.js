@@ -2899,7 +2899,12 @@ export function smlEcho(text, ty) {
 export function typeReport(source, ctx) {
   if (!ctx || !ctx.types) return null;
   try {
-    const ast = parseLine(source);
+    // Parse with the SESSION's fixity, exactly as the evaluator does below.
+    // Reading the line a second time with a different table is how the checker
+    // came to reject `2 plus 3` after `infix 6 plus`: it saw an application of
+    // 2 to two arguments, which is ill-typed, while the evaluator saw the
+    // operator the user had just declared. Same text, two grammars.
+    const ast = parseLine(source, (ctx.session && ctx.session.__fixity) || undefined);
     const r = typeOf(ast, ctx.session || {});
     if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
     remember(ast, ctx.session || {}, r.t);
