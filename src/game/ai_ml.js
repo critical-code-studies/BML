@@ -842,7 +842,24 @@ function parse(toks) {
       p++;
       const nameTok = eat('IDENT');
       eat('EQ');
-      if (!isKeyword(peek(), 'sig')) throw new RonmlError("expected 'sig' after a signature name");
+      // A signature abbreviation: `signature INT_DICT = DICT where type key =
+      // int`. The body is another signature's NAME, optionally refined by
+      // `where type … = …`. Since this build tracks names and not types, the
+      // refinement is a no-op and the new signature simply inherits the named
+      // one's public names. `views.sml` is built entirely this way.
+      if (!isKeyword(peek(), 'sig')) {
+        const refTok = eat('IDENT');
+        // Swallow any `where type t = …` clauses; they refine types we do not
+        // track, so there is nothing to record, only to skip.
+        while (isKeyword(peek(), 'where')) {
+          p++;
+          if (isKeyword(peek(), 'type')) p++;
+          while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
+          if (peek().t === 'IDENT') p++;              // the type name
+          if (peek().t === 'EQ') { p++; skipTypeExpr(); }
+        }
+        return { type: 'SigAbbrev', name: nameTok.v, from: refTok.v };
+      }
       p++;
       const names = [];
       while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') {
@@ -1942,6 +1959,17 @@ function evalNode(node, env, ctx, builtins) {
       return { tag: 'sig', name: node.name, names: node.names };
     }
 
+    // `signature B = A where type … = …`: B inherits A's public names. The
+    // where-type refinement is a no-op here, since signatures track names and
+    // not types.
+    case 'SigAbbrev': {
+      const store = (ctx && ctx.session) || {};
+      const names = (store.__sigs || {})[node.from];
+      if (!names) throw new RonmlError(`no signature ${node.from} to name`);
+      (store.__sigs = store.__sigs || {})[node.name] = names;
+      return { tag: 'sig', name: node.name, names };
+    }
+
     // A structure runs its declarations in a scope of their own and then
     // publishes them under a prefix, so `Board.size` finds what `size` became.
     // `:>` publishes only the names the signature lists, which is the real work
@@ -2642,7 +2670,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.6';
+export const AIML_VERSION = '1.7';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
