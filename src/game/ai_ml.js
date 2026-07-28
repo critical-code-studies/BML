@@ -245,13 +245,16 @@ function parse(toks, fixityIn) {
     // `fn x => e` is the common case, but ML's fn takes a MATCH: several
     // alternatives separated by |, which is what makes `fn nil => … | _ => …`
     // work and what the corpus uses for one-off matchers.
-    const first = parsePattern();
+    // `fn x : real => …` — an annotated parameter, written without brackets.
+    // parsePatternAnn keeps the annotation so the checker still sees the claim;
+    // `fn (x : real) => …` is the same thing and already worked.
+    const first = parsePatternAnn();
     if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after fn's parameter — try: fn x => x");
     p++;
     const arms = [{ pat: first, body: parseExpr1() }];
     while (peek().t === 'BAR') {
       p++;
-      const pat = parsePattern();
+      const pat = parsePatternAnn();
       if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after a pattern — try: fn nil => 0 | _ => 1");
       p++;
       arms.push({ pat, body: parseExpr1() });
@@ -871,7 +874,10 @@ function parse(toks, fixityIn) {
       if (t.t === 'LP') { depth++; p++; continue; }
       if (t.t === 'RP') { if (!depth) break; depth--; p++; continue; }
       if (t.t === 'STAR' && !depth) { parts++; p++; continue; }
-      if (t.t === 'STAR' || t.t === 'ARROW' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
+      // `->` is ARROWT and belongs to the type; `=>` is ARROW and does NOT —
+      // it ends the annotation and starts the body of a `fn`. Consuming ARROW
+      // here swallowed the arrow of every `fn x : ty => e`.
+      if (t.t === 'STAR' || t.t === 'ARROWT' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
       if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(t.v.toLowerCase())) { p++; continue; }
       if (t.t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') { p += 2; continue; }
       break;
@@ -2826,7 +2832,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.9';
+export const AIML_VERSION = '2.0';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
