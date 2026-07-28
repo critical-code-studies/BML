@@ -115,10 +115,33 @@ function tokenize(src) {
     if (c === '=' && src[i + 1] === '=') { toks.push({ t: 'EQEQ' }); i += 2; continue; } // equality
     if (c === '=') { toks.push({ t: 'EQ' }); i++; continue; }                              // let-binding only
     if (c === '"') {
+      // Standard ML string escapes. The old code copied the character after a
+      // backslash verbatim, so `\n` was the letter n, not a newline — data
+      // silently corrupted, the worst kind of wrong. This is Harper §2.2.4:
+      // \n \t \\ \" and the numeric \ddd, plus the \…\ form that lets a string
+      // span source lines by swallowing whitespace between two backslashes.
       let j = i + 1, s = '';
       while (j < n && src[j] !== '"') {
-        if (src[j] === '\\' && j + 1 < n) { s += src[j + 1]; j += 2; continue; } // \" and \\ escapes
-        s += src[j]; j++;
+        if (src[j] !== '\\') { s += src[j]; j++; continue; }
+        const e = src[j + 1];
+        if (e === undefined) throw new RonmlError('a string ends with a lone backslash');
+        // \…\ : whitespace (including newlines) between two backslashes is
+        // elided, so a long string literal can be broken across lines.
+        if (/\s/.test(e)) {
+          let k = j + 1;
+          while (k < n && /\s/.test(src[k])) k++;
+          if (src[k] !== '\\') throw new RonmlError('a \\ … \\ gap in a string must close with a second \\');
+          j = k + 1; continue;
+        }
+        const simple = { n: '\n', t: '\t', r: '\r', '\\': '\\', '"': '"', a: '\x07', b: '\b', f: '\f', v: '\v' };
+        if (e in simple) { s += simple[e]; j += 2; continue; }
+        // \ddd : exactly three decimal digits, the character's code point.
+        if (/[0-9]/.test(e)) {
+          const m = src.slice(j + 1, j + 4);
+          if (!/^[0-9]{3}$/.test(m)) throw new RonmlError('a \\ddd escape needs exactly three digits');
+          s += String.fromCharCode(Number(m)); j += 4; continue;
+        }
+        throw new RonmlError(`unknown string escape \\${e}`);
       }
       if (j >= n) throw new RonmlError('unterminated string — a " has no closing "');
       toks.push({ t: 'STR', v: s });
@@ -2619,7 +2642,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.5';
+export const AIML_VERSION = '1.6';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
