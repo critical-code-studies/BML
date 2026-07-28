@@ -190,8 +190,47 @@ function isKeyword(tok, word) {
   return tok.t === 'IDENT' && tok.v.toLowerCase() === word;
 }
 
-function parse(toks) {
+// ---- Fixity ----------------------------------------------------------------
+//
+// In Standard ML an operator's precedence is a PARSE-TIME fact: `infix 8 OR`
+// changes how the lines after it are read, so the parser has to carry the table
+// and update it as it goes. Harper's regexp.sml declares OR and THEN in the
+// middle of a structure and uses them three lines later, in the same parse.
+//
+// Levels are SML's own. `^` sits at 6 with `+` and `-`, not at 7 with `*`,
+// which is where this parser used to put it.
+export function defaultFixity() {
+  return {
+    '*': [7, 'l'], '/': [7, 'l'], div: [7, 'l'], mod: [7, 'l'],
+    '+': [6, 'l'], '-': [6, 'l'], '^': [6, 'l'],
+    '::': [5, 'r'], '@': [5, 'r'],
+    '=': [4, 'l'], '<>': [4, 'l'], '<': [4, 'l'], '>': [4, 'l'], '<=': [4, 'l'], '>=': [4, 'l'],
+    // `o` (composition) and `before` are infix in Standard ML's Basis, and are
+    // deliberately NOT seeded here: neither function exists in this build, and
+    // `o` is an ordinary variable name in plenty of programs. Seeding them made
+    // every `x o y` parse as a composition and broke Harper's N-queens. Declare
+    // them with `infix` if you define them.
+  };
+}
+
+// Token type to the symbol the fixity table is keyed by.
+const OP_SYM = {
+  PLUS: '+', MINUS: '-', STAR: '*', SLASH: '/', CARET: '^',
+  LT: '<', GT: '>', LE: '<=', GE: '>=', EQEQ: '=', NE: '<>', EQ: '=',
+  CONS: '::', AT: '@',
+};
+// …and back to the node this parser already builds for it.
+const SYM_BIN = {
+  '+': 'PLUS', '-': 'MINUS', '*': 'STAR', '/': 'SLASH', '^': 'CARET',
+  '<': 'LT', '>': 'GT', '<=': 'LE', '>=': 'GE', '=': 'EQEQ', '<>': 'NE',
+  div: 'DIV', mod: 'MOD',
+};
+
+function parse(toks, fixityIn) {
   let p = 0;
+  // The parser's own copy: `infix` inside a block must not leak out to the
+  // caller's session until the declaration is actually evaluated.
+  const fixity = { ...(fixityIn || defaultFixity()) };
   let inBlock = 0;      // >0 while inside local/struct: `in` and `end` are the block's
   const peek = () => toks[p];
   const eat = (t) => {
@@ -612,54 +651,56 @@ function parse(toks) {
     return left;
   }
 
-  // Precedence, loosest to tightest: pipe < comparison < add/sub < mul/div/concat
-  // < application (juxtaposition). So `fact (n - 1) * n` is `(fact (n-1)) * n`, and
-  // `scan |> nearest` still parses as a pipe of two applications.
-  function parseCompare() {
-    let left = parseCons();
-    // EQ reaching here is equality, not a binding: parseTop and parseExpr1 have
-    // already eaten the `=` of any declaration before handing the value over.
+  // Precedence, loosest to tightest: pipe < and/or < the INFIX TABLE <
+  // application (juxtaposition). Everything between and/or and application is
+  // one precedence-climbing loop driven by `fixity`, so that a user's
+  // `infix 8 OR` sits in the same ladder as `+` and `::` rather than beside it.
+  //
+  // This replaced four hand-written levels (compare/cons/add/mul). The levels
+  // are unchanged from what those did, with one deliberate correction: `^` was
+  // at 7 with `*` and is now at 6 with `+`, which is where Standard ML puts it.
 
-    while (['LT', 'GT', 'LE', 'GE', 'EQEQ', 'NE', 'EQ'].includes(peek().t)) {
-      const op = toks[p++].t === 'EQ' ? 'EQEQ' : toks[p - 1].t;
-      left = { type: 'Bin', op, left, right: parseCons() };
+  // The operator at the cursor, as a fixity-table key, or null if there is none.
+  function opSym() {
+    const t = peek();
+    if (OP_SYM[t.t]) return OP_SYM[t.t];
+    if (t.t === 'IDENT') {
+      const w = t.v.toLowerCase();
+      if (w === 'div' || w === 'mod') return w;
+      // A user-declared operator. Matched case-sensitively, because OR and THEN
+      // are ordinary identifiers that happen to have been given a fixity.
+      if (Object.prototype.hasOwnProperty.call(fixity, t.v)) return t.v;
     }
-    return left;
-  }
-  function parseAdd() {
-    let left = parseMul();
-    while (peek().t === 'PLUS' || peek().t === 'MINUS') {
-      const op = toks[p++].t;
-      left = { type: 'Bin', op, left, right: parseMul() };
-    }
-    return left;
-  }
-  // `::` is right-associative: 1 :: 2 :: nil parses as 1 :: (2 :: nil). Harper
-  // (1993, p.9) puts it this way — a list "is either empty, or it consists of a
-  // value of type t followed by a t list" — and the associativity is what makes
-  // that recursive reading hold. Written by recursive descent on the right,
-  // which is the shortest correct way to say right-associative.
-  function parseCons() {
-    const left = parseAdd();
-    // `@` joins two lists where `::` puts one value on the front of one. Both
-    // group to the right and sit at the same level, as they do in ML.
-    if (peek().t === 'AT') { p++; return { type: 'Append', left, right: parseCons() }; }
-    if (peek().t !== 'CONS') return left;
-    p++;
-    return { type: 'Cons', head: left, tail: parseCons() };
+    return null;
   }
 
-  function parseMul() {
+  function mkInfix(sym, left, right) {
+    if (sym === '::') return { type: 'Cons', head: left, tail: right };
+    if (sym === '@') return { type: 'Append', left, right };
+    if (SYM_BIN[sym]) return { type: 'Bin', op: SYM_BIN[sym], left, right };
+    // A user-declared operator is an ordinary function applied to the PAIR, as
+    // it is in ML: `a OR b` is `OR (a, b)`.
+    return { type: 'App', fn: { type: 'Var', name: sym }, arg: { type: 'Tuple', items: [left, right] } };
+  }
+
+  function parseInfix(minPrec) {
     let left = parseApp();
-    // `mod` is a word rather than a symbol, as it is in ML, so it arrives as an
-    // IDENT and is matched here by value. Same precedence as * and /.
-    const isMod = (t) => t.t === 'IDENT' && ['mod', 'div'].includes(t.v.toLowerCase());
-    while (peek().t === 'STAR' || peek().t === 'SLASH' || peek().t === 'CARET' || isMod(peek())) {
-      const op = isMod(peek()) ? (peek().v.toLowerCase() === 'div' ? (p++, 'DIV') : (p++, 'MOD')) : toks[p++].t;
-      left = { type: 'Bin', op, left, right: parseApp() };
+    for (;;) {
+      const sym = opSym();
+      if (sym === null) break;
+      const f = fixity[sym];
+      if (!f || f[0] < minPrec) break;
+      p++;                                        // consume the operator
+      // Left-associative operators demand a tighter right operand; right-
+      // associative ones accept their own level, which is what makes
+      // `1 :: 2 :: nil` group to the right.
+      const right = parseInfix(f[1] === 'l' ? f[0] + 1 : f[0]);
+      left = mkInfix(sym, left, right);
     }
     return left;
   }
+
+  function parseCompare() { return parseInfix(0); }
 
   function atomStarts(tok) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
@@ -672,7 +713,13 @@ function parse(toks) {
 
   function parseApp() {
     let node = parseAtom();
-    while (atomStarts(peek())) {
+    // An identifier with a fixity is an OPERATOR, not an argument. Without this
+    // check `1 PLUS3 2` is read as applying 1 to PLUS3 and then to 2, because
+    // juxtaposition binds tighter than any infix and gets there first. Symbolic
+    // operators never reach here (they are not atom starts); word-shaped ones
+    // like Harper's OR and THEN do.
+    while (atomStarts(peek()) && !(peek().t === 'IDENT'
+        && Object.prototype.hasOwnProperty.call(fixity, peek().v))) {
       const arg = parseAtom();
       node = { type: 'App', fn: node, arg };
     }
@@ -681,6 +728,28 @@ function parse(toks) {
 
   function parseAtom() {
     const tok = peek();
+    // `op +` — an infix operator used as an ordinary value, so it can be passed
+    // to something else: `reduce (0, op +, l)`. Desugars to the function that
+    // takes the pair, which is what the operator IS in ML.
+    if (tok.t === 'IDENT' && tok.v.toLowerCase() === 'op') {
+      p++;
+      const t2 = toks[p++];
+      const sym = OP_SYM[t2.t] || (t2.t === 'STAR' ? '*' : null) || (t2.t === 'IDENT' ? t2.v : null);
+      if (!sym) throw new RonmlError('op needs an operator after it, as in: op +');
+      const L = { type: 'Var', name: '__opl' }, R = { type: 'Var', name: '__opr' };
+      return {
+        type: 'Lam',
+        param: '__oparg',
+        body: {
+          type: 'Case',
+          subject: { type: 'Var', name: '__oparg' },
+          arms: [{
+            pat: { p: 'tuple', items: [{ p: 'name', name: '__opl', args: [] }, { p: 'name', name: '__opr', args: [] }] },
+            body: mkInfix(sym, L, R),
+          }],
+        },
+      };
+    }
     // Unary minus: `-3` is `0 - 3`. (Binary `5 - 3` is caught in parseAdd before
     // we ever reach here, so this only fires when `-` opens a subexpression.)
     if (tok.t === 'MINUS') { p++; return { type: 'Bin', op: 'MINUS', left: { type: 'Lit', value: 0 }, right: parseAtom() }; }
@@ -833,6 +902,28 @@ function parse(toks) {
       let arity = 0;
       if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(); }
       return { type: 'ExnDecl', name: nameTok.v, arity };
+    }
+    // `infix [n] id …`, `infixr [n] id …`, `nonfix id …`. These are parse-time:
+    // the table is updated here so that the very next line in the same unit
+    // reads its operators correctly, and the node carries the change so eval can
+    // persist it into the session for the lines after that.
+    if (isKeyword(peek(), 'infix') || isKeyword(peek(), 'infixr') || isKeyword(peek(), 'nonfix')) {
+      const word = toks[p++].v.toLowerCase();
+      const assoc = word === 'infixr' ? 'r' : 'l';
+      let prec = 0;
+      if (peek().t === 'NUM' && !peek().real) prec = Number(toks[p++].v);
+      const names = [];
+      // The operators being declared. They are ordinary identifiers, and any
+      // symbolic ones (`**`) arrive as whatever the lexer made of them.
+      while (peek().t === 'IDENT' || OP_SYM[peek().t] || peek().t === 'STAR') {
+        const t = toks[p++];
+        names.push(t.t === 'IDENT' ? t.v : (OP_SYM[t.t] || t.v));
+      }
+      for (const n of names) {
+        if (word === 'nonfix') delete fixity[n];
+        else fixity[n] = [prec, assoc];
+      }
+      return { type: 'FixityDecl', word, prec, assoc, names };
     }
     // `signature NAME = sig ... end` — the names a structure agrees to show.
     // Without a checker this cannot verify the TYPES, and does not pretend to;
@@ -1953,6 +2044,18 @@ function evalNode(node, env, ctx, builtins) {
       return { tag: 'struct', name: node.name, names: published };
     }
 
+    // Fixity is applied at parse time; this persists it so the NEXT line parsed
+    // in this session sees it too.
+    case 'FixityDecl': {
+      const store = (ctx && ctx.session) || {};
+      const tbl = (store.__fixity = store.__fixity || defaultFixity());
+      for (const n of node.names) {
+        if (node.word === 'nonfix') delete tbl[n];
+        else tbl[n] = [node.prec, node.assoc];
+      }
+      return { tag: 'unit' };
+    }
+
     case 'SigDecl': {
       const store = (ctx && ctx.session) || {};
       (store.__sigs = store.__sigs || {})[node.name] = node.names;
@@ -2090,6 +2193,16 @@ function evalNode(node, env, ctx, builtins) {
     case 'App': {
       const fn = evalNode(node.fn, env, ctx, builtins);
       const arg = evalNode(node.arg, env, ctx, builtins);
+      // The closure case is inlined rather than going through applyValue,
+      // because it is the hot path of every recursive program and the host
+      // frame it saves is the difference between a deep continuation-passing
+      // program running and exhausting the host stack. Harper's N-queens in
+      // continuation-passing style sits close enough to that line to notice.
+      if (fn && fn.tag === 'closure') {
+        const env2 = Object.create(fn.env);
+        env2[fn.param.toLowerCase()] = arg;
+        return evalNode(fn.body, env2, fn.ctx, fn.builtins);
+      }
       return applyValue(fn, arg);
     }
     default:
@@ -2552,12 +2665,15 @@ const NOT_FITTED = [
   // That is the only thing that has stopped it going stale: it went on refusing
   // modules, exceptions, chars, local and refs after each of them shipped, six
   // times, and every time it fired before the parser and hid the real error.
-  [/^\s*infix\w*\b|\bop\b/, 'no infix declarations on this build.'],
-  [/\b(String|List|Int|Real|Char|Array|Vector|IO|TextIO|Option)\./, 'that library is not on this machine. ml -full lists what is.'],
+  // `infix`/`infixr`/`nonfix`/`op` were here until v1.277 added them, and
+  // String/List/Int/Option were here until v1.257 added them. Both pruned by
+  // the test below, which is the only thing that has ever kept this honest.
+  [/\b(Char|Real|Word|Array|Vector|IO|TextIO|OS|Math|Substring|General)\./, 'that library is not on this machine. ml -full lists what is.'],
+  [/^\s*(abstype|open)\b/, 'no abstype and no open on this build.'],
 ];
 
 // The samples the test uses, one per rule above, in the same order.
-export const NOT_FITTED_SAMPLES = ['infix 8 OR', 'String.explode s'];
+export const NOT_FITTED_SAMPLES = ['Char.ord c', 'open List'];
 
 export function diagnose(src) {
   for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;
@@ -2570,8 +2686,8 @@ export function diagnose(src) {
 // numbers left in.
 // Parse one line to an AST without evaluating it. Exists so the type checker
 // can look at what you wrote before the machine does anything about it.
-export function parseLine(source) {
-  return parse(tokenize(String(source)));
+export function parseLine(source, fixity) {
+  return parse(tokenize(String(source)), fixity);
 }
 
 // What the type checker makes of a line, as a string to print beside the
@@ -2670,7 +2786,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.7';
+export const AIML_VERSION = '1.8';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
@@ -2840,7 +2956,9 @@ export function runRonml(source, ctx) {
   if (trimmed.startsWith('*')) return runStar(trimmed.slice(1), ctx);
   try {
     const toks = tokenize(source);
-    const ast = parse(toks);
+    // The session's fixity table, so `infix 8 OR` on an earlier line changes how
+    // this one reads.
+    const ast = parse(toks, (ctx && ctx.session && ctx.session.__fixity) || undefined);
     const builtins = makeBuiltins(ctx && ctx.station);
     // A bare word typed as a WHOLE command that is neither a verb nor a known
     // binding is a typo, not a value — say so (and let the error chime play),
@@ -2884,6 +3002,15 @@ export function runRonml(source, ctx) {
     // on, which for a signature block is a colon, and that helps nobody.
     if (e instanceof RonmlRaise) {
       return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}` };
+    }
+    // A JavaScript stack overflow means one thing here: a program that recursed
+    // without ever coming back. The step budget is supposed to catch that first,
+    // but the two are in a race — a deeply nested (non-tail) recursion uses
+    // several host frames per AI-ML step, so on a small stack the host loses.
+    // Report it as what it is rather than leaking the engine's own words, and
+    // the fault a machine shows is the same either way.
+    if (e instanceof RangeError && /call stack/i.test(e.message || '')) {
+      return { ok: false, text: 'ERR: step budget exceeded — this recursion never comes back' };
     }
     const why = diagnose(source);
     if (why) return { ok: false, text: `ERR: ${why}` };
