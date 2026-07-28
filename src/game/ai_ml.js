@@ -633,7 +633,11 @@ function parse(toks, fixityIn) {
   function andIsBinding() {
     let q = p + 1;
     if (!toks[q] || toks[q].t !== 'IDENT') return false;
-    while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
+    // A binding's left-hand side is a name and then, for a `fun` clause, its
+    // parameter patterns — which may be literals (`and od 0 = false`), not only
+    // identifiers. Scanning identifiers alone made a mutually recursive
+    // definition read as a boolean conjunction.
+    while (toks[q] && ['IDENT', 'LP', 'LB', 'LC', 'NUM', 'STR', 'CHAR', 'NEG', 'USCORE'].includes(toks[q].t)) q++;
     return !!toks[q] && toks[q].t === 'EQ';
   }
 
@@ -868,14 +872,41 @@ function parse(toks, fixityIn) {
       if (t.t === 'RP') { if (!depth) break; depth--; p++; continue; }
       if (t.t === 'STAR' && !depth) { parts++; p++; continue; }
       if (t.t === 'STAR' || t.t === 'ARROW' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
-      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in'].includes(t.v.toLowerCase())) { p++; continue; }
+      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(t.v.toLowerCase())) { p++; continue; }
       if (t.t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') { p += 2; continue; }
       break;
     }
     return parts;
   }
 
+  // SIMULTANEOUS DECLARATIONS. `type count = int and average = real`,
+  // `datatype tree = … and forest = …`, `fun ev … and od …`. The `and` joins
+  // declarations of the SAME kind, so the keyword is not repeated after it.
+  //
+  // Handled by continuing with the keyword the chain started with: the `and`
+  // token is rewritten to it and the same declaration parser runs again. A
+  // boolean `and` never reaches here — parseBool has already eaten it (see
+  // andIsBinding), so an `and` still standing at this point is a chain.
+  //
+  // Mutual recursion works without further ceremony at the top level: closures
+  // capture the session object itself, so a name bound by a later declaration
+  // in the chain is visible to an earlier one by the time either is called.
+  const CHAINS = ['type', 'datatype', 'val', 'fun'];
   function parseTop() {
+    const first = peek();
+    const kw = first.t === 'IDENT' ? first.v.toLowerCase() : null;
+    const d = parseTopOne();
+    if (!CHAINS.includes(kw)) return d;
+    if (!(peek().t === 'IDENT' && peek().v.toLowerCase() === 'and')) return d;
+    const items = [d];
+    while (peek().t === 'IDENT' && peek().v.toLowerCase() === 'and') {
+      toks[p] = { ...toks[p], v: kw };     // read the `and` as the keyword again
+      items.push(parseTopOne());
+    }
+    return { type: 'Decls', items };
+  }
+
+  function parseTopOne() {
     // `datatype colour = Red | Blue | Circle of num`
     //
     // The `of ...` part is a TYPE, and this build does not check types, so it
@@ -2046,6 +2077,15 @@ function evalNode(node, env, ctx, builtins) {
 
     // Fixity is applied at parse time; this persists it so the NEXT line parsed
     // in this session sees it too.
+    // A chain of simultaneous declarations. Evaluated in order into the same
+    // environment, which is what makes `fun ev … and od …` mutually recursive:
+    // both land in the session before either is called.
+    case 'Decls': {
+      let last = { tag: 'unit' };
+      for (const d of node.items) last = evalNode(d, env, ctx, builtins);
+      return last;
+    }
+
     case 'FixityDecl': {
       const store = (ctx && ctx.session) || {};
       const tbl = (store.__fixity = store.__fixity || defaultFixity());
@@ -2786,7 +2826,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '1.8';
+export const AIML_VERSION = '1.9';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
