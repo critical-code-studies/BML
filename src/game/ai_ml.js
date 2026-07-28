@@ -56,6 +56,37 @@ let FUEL = CONSOLE_FUEL;
 
 // ---- Tokenizer --------------------------------------------------------
 
+// Read a run of characters up to `close`, decoding Standard ML's escapes on the
+// way: \n \t \r \\ \" \a \b \f \v, the numeric \ddd, and the \ … \ gap that lets a
+// literal span source lines. Shared by strings and character literals, which
+// take the same escapes — the character lexer used to take none, so `#"\\"`
+// could not be lexed and Harper's regexp tokenizer was unreadable.
+// Returns the decoded text and the index of the closing delimiter.
+function readEscaped(src, from, n, close) {
+  let j = from, out = '';
+  while (j < n && src[j] !== close) {
+    if (src[j] !== '\\') { out += src[j]; j++; continue; }
+    const e = src[j + 1];
+    if (e === undefined) throw new RonmlError('a literal ends with a lone backslash');
+    // \ … \ : whitespace between two backslashes is elided.
+    if (/\s/.test(e)) {
+      let k = j + 1;
+      while (k < n && /\s/.test(src[k])) k++;
+      if (src[k] !== '\\') throw new RonmlError('a \\ … \\ gap must close with a second \\');
+      j = k + 1; continue;
+    }
+    const simple = { n: '\n', t: '\t', r: '\r', '\\': '\\', '"': '"', a: '\x07', b: '\b', f: '\f', v: '\v' };
+    if (e in simple) { out += simple[e]; j += 2; continue; }
+    if (/[0-9]/.test(e)) {
+      const m = src.slice(j + 1, j + 4);
+      if (!/^[0-9]{3}$/.test(m)) throw new RonmlError('a \\ddd escape needs exactly three digits');
+      out += String.fromCharCode(Number(m)); j += 4; continue;
+    }
+    throw new RonmlError(`unknown escape \\${e}`);
+  }
+  return { text: out, at: j };
+}
+
 function tokenize(src) {
   const toks = [];
   let i = 0;
@@ -82,10 +113,15 @@ function tokenize(src) {
     // #"a" is a character; #label and #1 are selectors. The quote tells them
     // apart, and it has to be checked first or every char lexes as a selector.
     if (c === '#' && src[i + 1] === '"') {
-      const ch = src[i + 2];
-      if (src[i + 3] !== '"') throw new RonmlError('a character is one letter: #"a"');
-      toks.push({ t: 'CHAR', v: ch });
-      i += 4;
+      // A character literal takes the SAME escapes a string does — `#"\\"` is a
+      // backslash and `#"\n"` is a newline. They were not decoded here, so
+      // Harper's regexp tokenizer, which matches `#"\\"` to spot an escaped
+      // character in a pattern, could not be lexed at all.
+      const r = readEscaped(src, i + 2, n, '"');
+      if (r.text.length !== 1) throw new RonmlError('a character is one letter: #"a"');
+      if (src[r.at] !== '"') throw new RonmlError('a character is one letter: #"a"');
+      toks.push({ t: 'CHAR', v: r.text });
+      i = r.at + 1;
       continue;
     }
     if (c === '#') { toks.push({ t: 'HASH' }); i++; continue; }  // #label and #1
@@ -120,32 +156,10 @@ function tokenize(src) {
       // silently corrupted, the worst kind of wrong. This is Harper §2.2.4:
       // \n \t \\ \" and the numeric \ddd, plus the \…\ form that lets a string
       // span source lines by swallowing whitespace between two backslashes.
-      let j = i + 1, s = '';
-      while (j < n && src[j] !== '"') {
-        if (src[j] !== '\\') { s += src[j]; j++; continue; }
-        const e = src[j + 1];
-        if (e === undefined) throw new RonmlError('a string ends with a lone backslash');
-        // \…\ : whitespace (including newlines) between two backslashes is
-        // elided, so a long string literal can be broken across lines.
-        if (/\s/.test(e)) {
-          let k = j + 1;
-          while (k < n && /\s/.test(src[k])) k++;
-          if (src[k] !== '\\') throw new RonmlError('a \\ … \\ gap in a string must close with a second \\');
-          j = k + 1; continue;
-        }
-        const simple = { n: '\n', t: '\t', r: '\r', '\\': '\\', '"': '"', a: '\x07', b: '\b', f: '\f', v: '\v' };
-        if (e in simple) { s += simple[e]; j += 2; continue; }
-        // \ddd : exactly three decimal digits, the character's code point.
-        if (/[0-9]/.test(e)) {
-          const m = src.slice(j + 1, j + 4);
-          if (!/^[0-9]{3}$/.test(m)) throw new RonmlError('a \\ddd escape needs exactly three digits');
-          s += String.fromCharCode(Number(m)); j += 4; continue;
-        }
-        throw new RonmlError(`unknown string escape \\${e}`);
-      }
-      if (j >= n) throw new RonmlError('unterminated string — a " has no closing "');
-      toks.push({ t: 'STR', v: s });
-      i = j + 1;
+      const r = readEscaped(src, i + 1, n, '"');
+      if (r.at >= n) throw new RonmlError('unterminated string — a " has no closing "');
+      toks.push({ t: 'STR', v: r.text });
+      i = r.at + 1;
       continue;
     }
     if (/[0-9]/.test(c)) {
@@ -871,6 +885,21 @@ function parse(toks, fixityIn) {
     } catch { p = save; return { t: 'name', name: '_' }; }
   }
 
+  // `where type t = …` refines a type in a signature. Nothing here tracks types
+  // at that level, so there is nothing to record — only to get past. Used after
+  // every ascription: signature abbreviations, structures, and functors.
+  function skipWhereClauses() {
+    while (isKeyword(peek(), 'where')) {
+      p++;
+      if (isKeyword(peek(), 'type')) p++;
+      while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
+      if (peek().t === 'IDENT') p++;                 // the type name
+      // A qualified name (`K.t`) arrives as its own tokens; take the dots too.
+      while (peek().t === 'DOT' || (peek().t === 'IDENT' && toks[p - 1] && toks[p - 1].t === 'DOT')) p++;
+      if (peek().t === 'EQ') { p++; skipTypeExpr(); }
+    }
+  }
+
   function skipTypeExpr() {
     let parts = 1;
     let depth = 0;
@@ -983,15 +1012,7 @@ function parse(toks, fixityIn) {
       // one's public names. `views.sml` is built entirely this way.
       if (!isKeyword(peek(), 'sig')) {
         const refTok = eat('IDENT');
-        // Swallow any `where type t = …` clauses; they refine types we do not
-        // track, so there is nothing to record, only to skip.
-        while (isKeyword(peek(), 'where')) {
-          p++;
-          if (isKeyword(peek(), 'type')) p++;
-          while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
-          if (peek().t === 'IDENT') p++;              // the type name
-          if (peek().t === 'EQ') { p++; skipTypeExpr(); }
-        }
+        skipWhereClauses();
         return { type: 'SigAbbrev', name: nameTok.v, from: refTok.v };
       }
       p++;
@@ -1033,10 +1054,17 @@ function parse(toks, fixityIn) {
       p++;
       const nameTok = eat('IDENT');
       eat('LP');
+      // Standard ML lets a functor's parameter be written as a SPECIFICATION
+      // rather than a name: `functor F (structure K : ORDERED)` means the
+      // parameter is an anonymous structure and `K` is visible directly in the
+      // body. That is already how a functor is applied here — the argument's
+      // names are bound both bare and under the parameter's name — so the
+      // sugar only has to reach the same place: take K as the parameter.
+      if (isKeyword(peek(), 'structure')) p++;
       const param = eat('IDENT').v;
       if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); }
       eat('RP');
-      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); }
+      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); skipWhereClauses(); }
       eat('EQ');
       if (!isKeyword(peek(), 'struct')) throw new RonmlError("expected 'struct' after a functor's =");
       p++;
@@ -1051,13 +1079,21 @@ function parse(toks, fixityIn) {
       p++;
       const nameTok = eat('IDENT');
       let ascribe = null;
-      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; ascribe = eat('IDENT').v; }
+      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; ascribe = eat('IDENT').v; skipWhereClauses(); }
       eat('EQ');
       // `structure M = F (A)` applies a functor rather than opening a struct.
       if (peek().t === 'IDENT' && !isKeyword(peek(), 'struct')) {
         const fn = eat('IDENT').v;
         let arg = null;
-        if (peek().t === 'LP') { p++; arg = eat('IDENT').v; eat('RP'); }
+        if (peek().t === 'LP') {
+          p++;
+          // …and the matching sugar at the application: `F (structure K = X)`
+          // names the argument by declaration rather than passing a structure.
+          // The name on the right is the structure being handed over.
+          if (isKeyword(peek(), 'structure')) { p++; eat('IDENT'); eat('EQ'); }
+          arg = eat('IDENT').v;
+          eat('RP');
+        }
         else if (peek().t === 'IDENT') arg = eat('IDENT').v;
         return { type: 'StructApply', name: nameTok.v, functor: fn, arg, ascribe };
       }
@@ -2838,7 +2874,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '2.1';
+export const AIML_VERSION = '2.2';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
