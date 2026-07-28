@@ -26,7 +26,7 @@
 // defining `=` into `==`. Both times the score dropped and the language was
 // fine. Before believing a regression here, check the translator.
 
-import { runRonml } from '../src/game/ai_ml.js';
+import { runRonml, loadPrelude } from '../src/game/ai_ml.js';
 import fs from 'fs';
 
 // ---- Splitting source into top-level declarations --------------------------
@@ -154,7 +154,9 @@ function translate(d) {
   // `ref`/`:=`, and the List/String/Int/Option structures all work and are no
   // longer skipped.
   if (/^(infix|infixr|nonfix|open|abstype)\b/.test(s)) return null;  // no fixity, no open, no abstype
-  if (/\b(Char|Real|Word|Array|Vector|IO|TextIO|OS|Math|General|Substring)\./.test(s)) return null;
+  // Char and Real were added to the prelude in v1.285 (L-G) and are no longer
+  // skipped. Everything still listed here has no implementation at all.
+  if (/\b(Word|Array|Vector|IO|TextIO|OS|Math|General|Substring)\./.test(s)) return null;
 
   // Nothing else is rewritten. #"a" is a char here now, ~n is unary minus,
   // annotations are checked, andalso/orelse are spelled as they are in ML, and
@@ -198,7 +200,13 @@ const report = [];
 for (const f of files) {
   const src = fs.readFileSync(`${DIR}/${f}`, 'utf8');
   const ds = decls(src);
+  // LOAD THE LIBRARY. Until v1.285 this line did not, so every declaration in
+  // the corpus calling List.find or String.tokens failed on a name the build
+  // actually had, and the whole of L-G measured as zero gain. The in-game
+  // terminal loads the prelude on its first line; the instrument must do what
+  // the thing it measures does.
   const ctx = { station: 'laptop', session: {} };
+  loadPrelude(ctx);
   let attempted = 0, ok = 0, skipped = 0;
   const errs = [];
   for (const d of ds) {

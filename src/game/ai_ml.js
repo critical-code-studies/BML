@@ -2786,12 +2786,16 @@ const NOT_FITTED = [
   // `infix`/`infixr`/`nonfix`/`op` were here until v1.277 added them, and
   // String/List/Int/Option were here until v1.257 added them. Both pruned by
   // the test below, which is the only thing that has ever kept this honest.
-  [/\b(Char|Real|Word|Array|Vector|IO|TextIO|OS|Math|Substring|General)\./, 'that library is not on this machine. ml -full lists what is.'],
+  [/\b(Word|Array|Vector|IO|TextIO|OS|Math|Substring|General)\./, 'that library is not on this machine. ml -full lists what is.'],
   [/^\s*(abstype|open)\b/, 'no abstype and no open on this build.'],
 ];
 
 // The samples the test uses, one per rule above, in the same order.
-export const NOT_FITTED_SAMPLES = ['Char.ord c', 'open List'];
+// One sample per rule in NOT_FITTED, walked by a test that checks each is
+// still genuinely refused. `Char.ord c` left this list at v1.285, when the
+// prelude gained Char and Real; `Array.sub` replaces it as a structure that
+// really is absent.
+export const NOT_FITTED_SAMPLES = ['Array.sub (a, 0)', 'open List'];
 
 export function diagnose(src) {
   for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;
@@ -2819,6 +2823,17 @@ export function parseLine(source, fixity) {
 // way to do.
 export const PRELUDE = [
   "datatype 'a option = NONE | SOME of 'a",
+  'datatype order = LESS | EQUAL | GREATER',
+  '',
+  '(* Composition and sequencing. Standard ML has these infix in the top-level',
+  '   environment, so the fixity is declared here rather than seeded into the',
+  '   parser: fixity is a fact about a program, and a program that wants `o`',
+  '   for something else can say `nonfix o` and have it. *)',
+  'fun o (f, g) = fn x => f (g x)',
+  'infixr 3 o',
+  'fun before (a, b) = a',
+  'infix 0 before',
+  'fun ignore _ = ()',
   '',
   'structure List = struct',
   '  fun null nil = true | null _ = false',
@@ -2830,11 +2845,31 @@ export const PRELUDE = [
   '  fun rev l = foldl (fn h => fn a => h :: a) nil l',
   '  fun exists p nil = false | exists p (h :: t) = p h orelse exists p t',
   '  fun all p nil = true | all p (h :: t) = p h andalso all p t',
-  '  fun nth (h :: t, n) = if n == 0 then h else nth (t, n - 1)',
-  '  fun take (l, n) = if n == 0 then nil else hd l :: take (tl l, n - 1)',
-  '  fun drop (l, n) = if n == 0 then l else drop (tl l, n - 1)',
+  '  fun find p nil = NONE',
+  '    | find p (h :: t) = if p h then SOME h else find p t',
+  '  fun app f nil = () | app f (h :: t) = (f h; app f t)',
+  '  fun last (h :: nil) = h | last (h :: t) = last t',
+  '  fun nth (h :: t, n) = if n = 0 then h else nth (t, n - 1)',
+  '  fun take (l, n) = if n = 0 then nil else hd l :: take (tl l, n - 1)',
+  '  fun drop (l, n) = if n = 0 then l else drop (tl l, n - 1)',
   '  fun concat nil = nil | concat (h :: t) = h @ concat t',
-  '  fun tabulate (n, f) = if n == 0 then nil else tabulate (n - 1, f) @ [f (n - 1)]',
+  '  fun tabulate (n, f) = if n = 0 then nil else tabulate (n - 1, f) @ [f (n - 1)]',
+  '  (* partition returns the pair (kept, rejected), in the original order. *)',
+  '  fun partition p nil = (nil, nil)',
+  '    | partition p (h :: t) =',
+  '        let val (y, n) = partition p t',
+  '        in if p h then (h :: y, n) else (y, h :: n) end',
+  '  (* zip stops at the shorter list, as ListPair.zip does. *)',
+  '  fun zip (nil, _) = nil',
+  '    | zip (_, nil) = nil',
+  '    | zip (a :: as1, b :: bs) = (a, b) :: zip (as1, bs)',
+  '  fun unzip nil = (nil, nil)',
+  '    | unzip ((a, b) :: t) = let val (x, y) = unzip t in (a :: x, b :: y) end',
+  'end',
+  '',
+  'structure ListPair = struct',
+  '  val zip = List.zip',
+  '  val unzip = List.unzip',
   'end',
   '',
   'structure Char = struct',
@@ -2842,9 +2877,12 @@ export const PRELUDE = [
   '  fun isUpper c = ord c >= 65 andalso ord c <= 90',
   '  fun isLower c = ord c >= 97 andalso ord c <= 122',
   '  fun isAlpha c = isUpper c orelse isLower c',
-  '  fun isSpace c = ord c == 32 orelse ord c == 9 orelse ord c == 10',
+  '  fun isAlphaNum c = isAlpha c orelse isDigit c',
+  '  fun isSpace c = ord c = 32 orelse ord c = 9 orelse ord c = 10',
   '  fun toUpper c = if isLower c then chr (ord c - 32) else c',
   '  fun toLower c = if isUpper c then chr (ord c + 32) else c',
+  '  fun toString c = "" ^ c',
+  '  fun compare (a, b) = Int.compare (ord a, ord b)',
   'end',
   '',
   'structure String = struct',
@@ -2853,7 +2891,39 @@ export const PRELUDE = [
   '  fun map f s = implode (List.map f (explode s))',
   '  fun rev s = implode (List.rev (explode s))',
   '  fun concat nil = "" | concat (h :: t) = h ^ concat t',
-  '  fun isPrefix (p, s) = List.take (explode s, size p) == explode p',
+  '  fun isPrefix (p, s) = List.take (explode s, size p) = explode p',
+  '  fun substring (s, i, n) = implode (List.take (List.drop (explode s, i), n))',
+  '  fun extract (s, i, NONE) = implode (List.drop (explode s, i))',
+  '    | extract (s, i, SOME n) = substring (s, i, n)',
+  '  (* translate maps each character to a STRING and joins the results, which',
+  '     is what lets it delete and expand as well as replace. *)',
+  '  fun translate f s = concat (List.map f (explode s))',
+  '  fun concatWith sep nil = ""',
+  '    | concatWith sep (h :: nil) = h',
+  '    | concatWith sep (h :: t) = h ^ sep ^ concatWith sep t',
+  '  (* tokens splits on every character the predicate accepts and DROPS empty',
+  '     fields; fields keeps them. That is the only difference between them. *)',
+  '  fun fields p s =',
+  '        let fun go (nil, cur) = [implode (List.rev cur)]',
+  '              | go (c :: t, cur) =',
+  '                  if p c then implode (List.rev cur) :: go (t, nil)',
+  '                  else go (t, c :: cur)',
+  '        in go (explode s, nil) end',
+  '  fun tokens p s = List.filter (fn f => f <> "") (fields p s)',
+  '  fun toString s = s',
+  '  val explode = explode',
+  '  val implode = implode',
+  '  (* compare walks the two strings together and answers at the first',
+  '     character that differs; a prefix is LESS than what extends it. *)',
+  '  fun compare (a, b) =',
+  '        let fun go (nil, nil) = EQUAL',
+  '              | go (nil, _) = LESS',
+  '              | go (_, nil) = GREATER',
+  '              | go (x :: xs, y :: ys) =',
+  '                  case Char.compare (x, y) of',
+  '                    EQUAL => go (xs, ys)',
+  '                  | r => r',
+  '        in go (explode a, explode b) end',
   'end',
   '',
   'structure Int = struct',
@@ -2861,6 +2931,39 @@ export const PRELUDE = [
   '  fun min (a, b) = if a < b then a else b',
   '  fun max (a, b) = if a > b then a else b',
   '  fun toString n = "" ^ n',
+  '  fun compare (a, b) = if a < b then LESS else if a > b then GREATER else EQUAL',
+  '  fun sign n = if n < 0 then ~1 else if n > 0 then 1 else 0',
+  '  (* fromString answers an option: a string that is not a numeral is not an',
+  '     error, it is simply NONE, and the caller decides what that means. *)',
+  '  fun fromString s =',
+  '        let fun digits (nil, acc, seen) = if seen then SOME acc else NONE',
+  '              | digits (c :: t, acc, seen) =',
+  '                  if Char.isDigit c then digits (t, acc * 10 + (ord c - 48), true)',
+  '                  else NONE',
+  '        in case explode s of',
+  '             nil => NONE',
+  '           | #"~" :: t => (case digits (t, 0, false) of',
+  '                             SOME n => SOME (0 - n)',
+  '                           | NONE => NONE)',
+  '           | cs => digits (cs, 0, false)',
+  '        end',
+  'end',
+  '',
+  'structure Real = struct',
+  '  fun abs x = if x < 0.0 then 0.0 - x else x',
+  '  fun min (a, b) = if a < b then a else b',
+  '  fun max (a, b) = if a > b then a else b',
+  '  fun fromInt n = real n',
+  '  fun round x = floor (x + 0.5)',
+  '  fun toString x = "" ^ x',
+  'end',
+  '',
+  'structure Bool = struct',
+  '  fun toString true = "true" | toString false = "false"',
+  '  fun fromString "true" = SOME true',
+  '    | fromString "false" = SOME false',
+  '    | fromString _ = NONE',
+  '  fun not true = false | not false = true',
   'end',
   '',
   'structure Option = struct',
@@ -2868,6 +2971,8 @@ export const PRELUDE = [
   '  fun valOf (SOME x) = x',
   '  fun getOpt (NONE, d) = d | getOpt (SOME x, _) = x',
   '  fun map f NONE = NONE | map f (SOME x) = SOME (f x)',
+  '  fun join NONE = NONE | join (SOME x) = x',
+  '  fun filter p x = if p x then SOME x else NONE',
   'end',
 ].join('\n');
 
@@ -2923,7 +3028,7 @@ export function typeReport(source, ctx) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '2.4';
+export const AIML_VERSION = '2.5';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
@@ -3002,21 +3107,28 @@ export function aimlFull() {
   row('on a clash', 'names it, then runs the line anyway.');
 
   sec('THE LIBRARY');
-  row('List', 'map filter foldl foldr rev exists all nth take');
-  L.push('                            drop concat tabulate null');
-  row('String', 'size sub map rev concat isPrefix');
-  row('Char', 'isDigit isAlpha isUpper isLower isSpace toUpper');
-  L.push('                            toLower');
-  row('Int', 'abs min max toString');
-  row('Option', "datatype 'a option, isSome valOf getOpt map");
+  row('List', 'map filter foldl foldr rev exists all find app');
+  L.push('                            last nth take drop concat tabulate null');
+  L.push('                            partition zip unzip');
+  row('String', 'size sub map rev concat isPrefix substring extract');
+  L.push('                            translate concatWith fields tokens compare');
+  L.push('                            explode implode toString');
+  row('Char', 'isDigit isAlpha isAlphaNum isUpper isLower isSpace');
+  L.push('                            toUpper toLower toString compare');
+  row('Int', 'abs min max sign toString fromString compare');
+  row('Real', 'abs min max round fromInt toString');
+  row('Bool', 'toString fromString not');
+  row('Option', "datatype 'a option, isSome valOf getOpt map join filter");
+  row('ListPair', 'zip unzip');
+  row('order', 'datatype order = LESS | EQUAL | GREATER');
+  row('top level', 'o (composition, infixr 3), before (infix 0), ignore');
   row('bare verbs', 'hd tl length abs sqrt min max size real floor');
   L.push('                            ord chr str explode implode ref echo');
   L.push('');
   L.push('  It is written in AI-ML, not underneath it. `ml -src List` prints it.');
 
   sec('NOT ON THIS BUILD');
-  row('infix declarations', 'no infix, no op.');
-  row('the rest of the library', 'no Array, Vector, IO, Real beyond sqrt.');
+  row('the rest of the library', 'no Array, Vector, IO, Math, Word, Substring.');
 
   sec('WRITTEN DIFFERENTLY');
   row('==  and  =', 'both are equality. A binding eats its = first.');
@@ -3111,6 +3223,11 @@ export function runRonml(source, ctx) {
       }
     }
     const toks = tokenize(source);
+    // Nothing but comments and space is EMPTY INPUT, not a broken command. The
+    // parser reported `unexpected end of command` for a line holding only a
+    // `(* … *)`, so pasting a commented program produced one error per comment.
+    // In Standard ML a comment is whitespace.
+    if (!toks.length || (toks.length === 1 && toks[0].t === 'EOF')) return { ok: true, text: '' };
     // The session's fixity table, so `infix 8 OR` on an earlier line changes how
     // this one reads.
     const ast = parse(toks, (ctx && ctx.session && ctx.session.__fixity) || undefined);
