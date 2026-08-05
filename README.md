@@ -20,9 +20,9 @@ open the file and confirm that it is.
 
 Types are inferred rather than declared, a program that does not typecheck does
 not run, and the tradition running from Milner's LCF is one of machine-checked
-proof, of formality as a working condition rather than as decoration. Whether a language of that kind teaches anything a survivor of a
-ruined world would need is a question the game this grew inside asks rather than
-answers.
+proof, of formality as a working condition rather than as decoration. Whether a
+language of that kind teaches anything a survivor of a ruined world would need is
+a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
