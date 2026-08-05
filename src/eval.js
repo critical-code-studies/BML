@@ -151,6 +151,19 @@ function applyBinOp(op, l, r) {
   if (op === 'EQEQ') { equalityChecked(l, r); return { tag: 'bool', v: valuesEqual(l, r) }; }
   if (op === 'NE') { equalityChecked(l, r); return { tag: 'bool', v: !valuesEqual(l, r) }; }
 
+  // STRINGS AND CHARACTERS ARE ORDERED. In Standard ML the comparisons are
+  // overloaded across int, real, char and string, and here they were numbers
+  // only, so `"a" < "b"` was refused and nothing could be sorted but numbers.
+  // Comparison is by code point, left to right, which is what SML's String
+  // ordering is.
+  const ORDERABLE = new Set(['LT', 'GT', 'LE', 'GE']);
+  if (ORDERABLE.has(op) && l && r && l.tag === r.tag && (l.tag === 'str' || l.tag === 'char')) {
+    const a0 = String(l.v), b0 = String(r.v);
+    const cmp = a0 < b0 ? -1 : (a0 > b0 ? 1 : 0);
+    const yes = op === 'LT' ? cmp < 0 : op === 'GT' ? cmp > 0 : op === 'LE' ? cmp <= 0 : cmp >= 0;
+    return { tag: 'bool', v: yes };
+  }
+
   // int and real are separate types now, as they are in ML, and the operators
   // divide along the same line: div and mod are whole-number, / is not. There
   // is no coercion between them; `real` and `floor` convert on request.

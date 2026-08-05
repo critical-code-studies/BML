@@ -25,6 +25,20 @@ import { describeValue, formatValue, pushOut } from './eval.js';
 const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
 
 export const PRIMITIVES = {
+  // ANY value as the text it prints as. The prelude used to write `"" ^ n` for
+  // this, leaning on the fact that `^` coerces at runtime. The checker types
+  // `^` as string-only, which is what Standard ML says it is, so `Int.toString`
+  // inferred `string -> string` and `Int.toString 42` was an error under strict.
+  // A conversion needs to be a conversion.
+  // Named after Poly/ML's `PolyML.makestring`, which is this exact function.
+  // Not called `toString`, because the structures define their own `toString`
+  // and a member shadows a top-level name of the same spelling: the first
+  // attempt wrote `fun toString n = toString n` and recursed until the budget
+  // ran out.
+  makestring: {
+    arity: 1,
+    fn: ([v]) => ({ tag: 'str', v: formatValue(v) }),
+  },
   // The one way to print. The buffer it writes into is in eval.js, because a
   // closure captures the ctx of the line that defined it and a per-ctx buffer
   // swallowed output from any function called on a later line. The buffer moved

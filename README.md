@@ -25,7 +25,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.1.0, a little Standard ML
+BML 0.2.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -66,6 +66,15 @@ node tools/isml-conformance.mjs
 That corpus is Harper's teaching material. The harness fetches it on first run
 into a gitignored cache; it is **not** in this repository and is not
 redistributed here.
+
+## Examples
+
+Nine of them, simple to less so, in [examples/](examples/). Each runs on its own
+under the default checker:
+
+```
+bml examples/09-eight-queens.ml
+```
 
 ## Using it
 

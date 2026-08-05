@@ -729,23 +729,32 @@ export function parse(toks, fixityIn) {
     }
   }
 
-  function skipTypeExpr() {
+  // Walks a type expression and returns how many `*`-separated parts it had,
+  // which is a constructor's arity here. It also KEEPS the words of each part
+  // now: throwing them away meant `datatype shape = Circle of real` told the
+  // checker only that Circle takes one argument, so the argument came out as a
+  // fresh variable and `fun area (Rect (w, h)) = w * h` inferred int. The type
+  // was written down and then ignored.
+  function skipTypeExpr(out) {
     let parts = 1;
     let depth = 0;
+    const words = [[]];
+    const keep = (t) => { if (t.t === 'IDENT' && !depth) words[words.length - 1].push(t.v); };
     for (;;) {
       const t = peek();
       if (t.t === 'EOF') break;
       if (t.t === 'LP') { depth++; p++; continue; }
       if (t.t === 'RP') { if (!depth) break; depth--; p++; continue; }
-      if (t.t === 'STAR' && !depth) { parts++; p++; continue; }
+      if (t.t === 'STAR' && !depth) { parts++; words.push([]); p++; continue; }
       // `->` is ARROWT and belongs to the type; `=>` is ARROW and does NOT —
       // it ends the annotation and starts the body of a `fn`. Consuming ARROW
       // here swallowed the arrow of every `fn x : ty => e`.
       if (t.t === 'STAR' || t.t === 'ARROWT' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
-      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(t.v.toLowerCase())) { p++; continue; }
+      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(t.v.toLowerCase())) { keep(t); p++; continue; }
       if (t.t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') { p += 2; continue; }
       break;
     }
+    if (out) out.words = words;
     return parts;
   }
 
@@ -801,7 +810,8 @@ export function parse(toks, fixityIn) {
       p++;
       const nameTok = eat('IDENT');
       let arity = 0;
-      if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(); }
+      const shape = {};
+      if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(shape); }
       return { type: 'ExnDecl', name: nameTok.v, arity };
     }
     // `infix [n] id …`, `infixr [n] id …`, `nonfix id …`. These are parse-time:
@@ -954,8 +964,11 @@ export function parse(toks, fixityIn) {
         // val z = 1` it swallowed `val z` and then reported the `=`. Use the
         // one type skipper, which already knows that a declaration keyword ends
         // a type — and counts the same `*` separators.
-        if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(); }
-        cons.push({ name: c.v, arity });
+        const shape = {};
+        if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(shape); }
+        // argWords carries the words of each `*`-separated part, so the checker
+        // can give `Circle of real` a real rather than a fresh variable.
+        cons.push({ name: c.v, arity, argWords: shape.words || [] });
         if (peek().t !== 'BAR') break;
         p++;
       }

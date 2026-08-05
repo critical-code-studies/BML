@@ -233,7 +233,9 @@ test('a multi-argument constructor typechecks in both spellings', () => {
   assert.equal(bml.run('N L 1 L').ok, true, 'curried form');
   const r = bml.run('fun ins (L, x) = N (L, x, L) | ins (N (l,v,r), x) = N (l, v, r)');
   assert.equal(r.ok, true, `a clausal fun over both: ${r.text}`);
-  assert.equal(bml.typeReport('ins'), "(t * 'a) -> t");
+  // `(t * int) -> t` and not `(t * 'a) -> t`: since v1.296 the checker reads the
+  // types a constructor was DECLARED to carry, so `N of t * int * t` says what x is.
+  assert.equal(bml.typeReport('ins'), '(t * int) -> t');
 });
 
 test('andalso binds tighter than orelse, as it does in Standard ML', () => {
@@ -254,4 +256,36 @@ test('unit has a type', () => {
   // D-40: `()` had no case in the checker and took the fresh-variable fallback.
   const bml = createInterpreter({ typecheck: 'report' });
   assert.equal(bml.typeReport('()'), 'unit');
+});
+
+test('a constructor carries the type it was declared to carry', () => {
+  // The parser counted a constructor's arguments and threw their types away, so
+  // `datatype shape = Circle of real` told the checker only that Circle takes
+  // one thing, and `fun area (Rect (w, h)) = w * h` inferred int.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run('datatype shape = Circle of real | Rect of real * real');
+  assert.equal(bml.typeReport('Circle'), 'real -> shape');
+  bml.run('fun area (Rect (w, h)) = w * h');
+  assert.equal(bml.typeReport('area'), 'shape -> real');
+  // A recursive datatype knows its own name.
+  bml.run('datatype tree = Leaf | Node of tree * int * tree');
+  assert.equal(bml.typeReport('Node'), 'tree -> int -> tree -> tree');
+});
+
+test('strings and characters are ordered', () => {
+  // D-30 and D-31: comparison was numbers only, so nothing but numbers sorted.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('"a" < "b"').text, 'true');
+  assert.equal(bml.run('"abc" < "abd"').text, 'true');
+  assert.equal(bml.run('"b" <= "b"').text, 'true');
+  assert.equal(bml.run('"z" < "a"').text, 'false');
+  assert.equal(bml.run('#"a" < #"b"').text, 'true');
+});
+
+test('valOf, isSome and getOpt are at top level as well as in Option', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('valOf (SOME 2)').text, '2');
+  assert.equal(bml.run('isSome NONE').text, 'false');
+  assert.equal(bml.run('getOpt (NONE, 9)').text, '9');
 });

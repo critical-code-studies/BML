@@ -196,6 +196,7 @@ function baseEnv() {
     real: mono(fnOf(INT, REAL)),
     floor: mono(fnOf(REAL, INT)),
     ord: mono(fnOf(CHAR, INT)),
+    makestring: scheme([a.id], fnOf(a, STR)),
     chr: mono(fnOf(INT, CHAR)),
     str: mono(fnOf(CHAR, STR)),
     explode: mono(fnOf(STR, listOf(CHAR))),
@@ -409,7 +410,13 @@ export function infer(node, env, cons) {
       if (node.op === 'DIV' || node.op === 'MOD') { unify(l, INT); unify(r, INT); return INT; }
       if (node.op === 'SLASH') { unify(l, REAL); unify(r, REAL); return REAL; }
       if (NUMERIC.has(node.op)) { unify(l, r); return numeric(l, node.op); }
-      if (COMPARE.has(node.op)) { unify(l, r); numeric(l, node.op); return BOOL; }
+      // COMPARISON is overloaded in Standard ML across int, real, char and
+      // string, and the evaluator was taught the last two in v1.296. This line
+      // still called `numeric`, so the checker forced both sides to a number
+      // and `quicksort` inferred `int list -> int list` from its first use,
+      // which meant the same function could not then sort words. The two sides
+      // must agree; what they agree ON is not the checker's business here.
+      if (COMPARE.has(node.op)) { unify(l, r); return BOOL; }
       unify(l, r);                 // == and <> compare any two of one type
       return BOOL;
     }
@@ -618,6 +625,26 @@ export function typeOf(ast, session = {}) {
 
 // Record what a top-level binding turned out to be, so the next line can use
 // it. Declaring a datatype registers its constructors as functions into it.
+
+// A constructor argument's declared type, from the words the parser kept.
+// Deliberately small: the base types, a list of one of them, and the datatype
+// being declared (so `Node of tree * int * tree` knows what a tree is). Anything
+// else is a fresh variable, which is no worse than before this existed.
+const BASE_TYPES = { int: () => INT, real: () => REAL, string: () => STR, str: () => STR, bool: () => BOOL, char: () => CHAR, unit: () => UNIT };
+function typeOfWords(ws, selfType, selfName) {
+  if (!ws || !ws.length) return fresh();
+  const last = ws[ws.length - 1];
+  const head = ws[0];
+  const baseOf = (w) => {
+    if (BASE_TYPES[w]) return BASE_TYPES[w]();
+    if (selfName && w === selfName) return selfType;
+    return null;
+  };
+  if (ws.length === 1) return baseOf(head) || fresh();
+  if (last === 'list') { const b = baseOf(head); return b ? listOf(b) : fresh(); }
+  return baseOf(last) || baseOf(head) || fresh();
+}
+
 export function remember(ast, session, t) {
   if (!session.__types) session.__types = {};
   if (!session.__contypes) session.__contypes = {};
@@ -642,7 +669,13 @@ export function remember(ast, session, t) {
     session.__datacons[ast.name] = ast.cons.map((c) => c.name);
     for (const c of ast.cons) {
       let ty = self;
-      for (let i = 0; i < c.arity; i++) ty = fnOf(fresh(), ty);
+      // Build the arrow chain from the RIGHT, so the declared types line up
+      // with the arguments in order. Each part's words come from the parser;
+      // a base type is used as written, `X list` becomes a list of X, and
+      // anything this module has no opinion about stays a fresh variable,
+      // which is what every argument used to be.
+      const words = c.argWords || [];
+      for (let i = c.arity - 1; i >= 0; i--) ty = fnOf(typeOfWords(words[i], self, ast.name), ty);
       session.__contypes[c.name] = generalise({}, ty);
       if (!session.__conarity) session.__conarity = {};
       session.__conarity[c.name] = c.arity;
