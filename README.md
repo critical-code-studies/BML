@@ -3,6 +3,28 @@
 A little Standard ML, in plain JavaScript. No build step, no dependencies, no
 `package.json`.
 
+BML is a small implementation of Standard ML, written so that the whole of it
+can be read. The lexer, the parser, the type inference, the standard library:
+all of it is short enough that one person can hold it in mind and follow what
+happens to a program between the typing and the answer.
+
+This matters because computation is ordinarily met as something already decided.
+The compiler is opaque, the type error arrives from nowhere, and the student
+learns to propitiate the machine rather than to understand it. Iteracy, by which
+I mean the capacity to read and write computational processes rather than merely
+to operate them, depends on there being something available to read; and an
+instrument whose parameters are visible is a different sort of object from one
+whose parameters are hidden. A teaching interpreter can be the first sort. The
+standard library here is written in BML itself and loaded as source, so the `map`
+you call is the `map` you could have written, and you can open the file and
+confirm it.
+
+Standard ML is the inheritance worth taking up. Types are inferred rather than
+declared, a program that does not typecheck does not run, and the tradition
+running from Milner's LCF is one of machine-checked proof, of formality as a
+working condition rather than a decoration. It seems to me more useful to argue
+with that inheritance than to argue around it.
+
 ```
 $ node bin/bml.js
 BML 2.6   :quit to leave, :t for a type
@@ -16,9 +38,6 @@ val it = ([3, 4], [1, 2]) : int list * int list
 - val x : int = "hello"
 ERR: string and int are not the same type
 ```
-
-In Standard ML a program that does not typecheck does not run, and on the
-command line BML works that way.
 
 ## What is here
 
