@@ -72,7 +72,7 @@ function banner() {
     '',
     sloppy
       ? 'advisory: a clash is named and the line runs anyway.'
-      : 'strict: a line that does not typecheck will not run.',
+      : 'strict: use typecheck',
     'Type help for the forms, :quit to leave.',
     '',
   ].join('\n');

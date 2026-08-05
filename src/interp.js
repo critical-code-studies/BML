@@ -217,9 +217,18 @@ export function createInterpreter(opts = {}) {
       // the honest claim was that the language *infers* types, not that it *is*
       // typed. Same checker, same message as 'report'; the only difference is
       // whether the line then runs. Warnings stay warnings under both.
-      if (typecheck === 'strict') {
+      // CHECK whenever the checker is on, not only when it can refuse. Under
+      // 'report' this used to skip typeReport entirely, so a caller that used
+      // `run` alone recorded no types at all and a structure declared at the
+      // prompt was never walked. The REPL happened to work because bin/bml.js
+      // calls typeReport itself first; anyone using this as a library got
+      // silence. Calling it here costs a second idempotent pass for those
+      // callers and removes the trap for everyone else.
+      if (typecheck !== 'off') {
         const ty = typeReport(source);
-        if (ty && ty.startsWith('TYPE:')) return { ok: false, text: `ERR: ${ty.slice(6).trim()}` };
+        if (typecheck === 'strict' && ty && ty.startsWith('TYPE:')) {
+          return { ok: false, text: `ERR: ${ty.slice(6).trim()}` };
+        }
       }
       const toks = tokenize(source);
       // Nothing but comments and space is EMPTY INPUT, not a broken command.
@@ -304,7 +313,9 @@ export function createInterpreter(opts = {}) {
     if (session.__prelude) return;
     session.__prelude = true;
     for (const line of joinProgramLines(PRELUDE)) {
-      try { run(line, hostCtx); } catch { /* see above */ }
+      try {
+        run(line, hostCtx);
+      } catch { /* see above */ }
     }
   }
 

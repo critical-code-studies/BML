@@ -182,3 +182,41 @@ test('flattenSession drops what cannot survive a save, and does not throw', () =
   assert.equal(flat.kept.v, 42, 'ordinary values survive');
   assert.equal('f' in flat, false, 'the closure is left out rather than breaking the save');
 });
+
+// ---- qualified names have types (v1.293) -------------------------------------
+
+test('a structure member reports its own type, not a fresh variable', () => {
+  // `:t List.partition` answered `'a`. The parser makes `List.partition` ONE
+  // Var whose name contains a dot; the checker looked up `list.partition`,
+  // missed, and fell through to the fresh-variable case that exists so the
+  // game's world-reaching verbs do not have to be typed. Nothing had ever
+  // recorded a member's type because `infer` had no case for a structure at all.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  assert.equal(bml.typeReport('List.partition'), "('a -> bool) -> 'a list -> 'a list * 'a list");
+  assert.equal(bml.typeReport('List.map'), "('a -> 'b) -> 'a list -> 'b list");
+  assert.equal(bml.typeReport('List.filter'), "('a -> bool) -> 'a list -> 'a list");
+  assert.equal(bml.typeReport('String.size'), 'string -> int');
+});
+
+test('a structure you declare yourself is typed the same way', () => {
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run('structure M = struct fun double x = x * 2 val label = "m" end');
+  assert.equal(bml.typeReport('M.double'), 'int -> int');
+  assert.equal(bml.typeReport('M.label'), 'string');
+});
+
+test('a member that will not type does not stop the rest of the structure', () => {
+  // The console reports rather than gates, and a structure is not all-or-nothing.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run('structure M = struct fun ok x = x + 1 val bad = 1 + "no" fun also y = y end');
+  assert.equal(bml.typeReport('M.ok'), 'int -> int');
+  assert.match(String(bml.typeReport('M.also')), /->/, 'the member after the bad one is still typed');
+});
+
+test('an unknown name still falls back rather than erroring', () => {
+  // The fallback is deliberate: the game has verbs that reach into the world and
+  // refusing them would make inference a gate rather than a report.
+  const bml = createInterpreter({ typecheck: 'report' });
+  assert.equal(bml.typeReport('someVerbTheHostSupplies'), "'a");
+});

@@ -494,6 +494,36 @@ export function infer(node, env, cons) {
 
     case 'Datatype': return UNIT;
 
+    // A STRUCTURE. Until v1.293 this fell through to `fresh()` below, so
+    // `structure List = struct … end` was never walked and no member ever got a
+    // type. `List.map` then looked up `list.map`, missed, and took the same
+    // fallback, which is why every qualified name reported `'a` — not just the
+    // one you noticed, but the whole family, and any binding made from one.
+    //
+    // The members are inferred in a child environment, in order, so a member
+    // may use the ones declared before it (String.size calls List.nth). What
+    // each turned out to be is left on the node for `remember` to publish,
+    // because `remember` is where the session learns anything and inference is
+    // not supposed to write to it.
+    case 'StructDecl': case 'FunctorDecl': {
+      const inner = { ...env };
+      const members = {};
+      for (const d of node.decls || []) {
+        if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* a member this module cannot type is not an error in the structure */ } continue; }
+        try {
+          const t = infer(d.value, inner, cons);
+          const sch = isSyntacticValue(d.value) ? generalise(env, t) : mono(t);
+          inner[d.name.toLowerCase()] = sch;
+          members[d.name.toLowerCase()] = sch;
+        } catch {
+          // One member that will not type does not stop the rest: the console
+          // reports rather than gates, and a structure is not all-or-nothing.
+        }
+      }
+      node.__members = members;
+      return UNIT;
+    }
+
     default: return fresh();
   }
 }
@@ -559,6 +589,13 @@ export function remember(ast, session, t) {
     session.__types[ast.name.toLowerCase()] = isSyntacticValue(ast.value)
       ? generalise({}, t)
       : mono(t);
+  } else if (ast.type === 'StructDecl' && ast.__members) {
+    // Published as flat qualified keys, `list.map`, because that is exactly how
+    // the evaluator publishes them and how the parser hands the name over:
+    // `List.map` is ONE Var node whose name contains a dot, not a selection.
+    for (const k of Object.keys(ast.__members)) {
+      session.__types[`${ast.name.toLowerCase()}.${k}`] = ast.__members[k];
+    }
   } else if (ast.type === 'Datatype') {
     const self = con(ast.name);
     if (!session.__datacons) session.__datacons = {};

@@ -29,7 +29,7 @@ BML 0.1.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
-strict: a line that does not typecheck will not run.
+strict: use typecheck
 Type help for the forms, :quit to leave.
 
 - fun fact 0 = 1

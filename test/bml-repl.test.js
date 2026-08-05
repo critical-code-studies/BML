@@ -138,7 +138,7 @@ test('the banner says who made it, where, and which build', () => {
   assert.match(out, /BML \d+\.\d+\.\d+, a little Standard ML/);
   assert.match(out, /David M\. Berry, University of Sussex, 2026/);
   assert.match(out, /Milner, Mads Tofte and Robert Harper/);
-  assert.match(out, /strict: a line that does not typecheck will not run/);
+  assert.match(out, /strict: use typecheck/);
 });
 
 test('--sloppy says so in the banner rather than leaving you to guess', () => {
