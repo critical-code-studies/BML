@@ -1,0 +1,206 @@
+// THE INTERPRETER. The one entry point, and the thing a host holds.
+//
+// Part of src/lang/. Written at v1.288 (M3) out of what was `runRonml` in
+// src/game/ai_ml.js. See docs/aiml-standalone-plan.md §4.
+//
+// WHAT THIS FILE IS FOR. Before it, the entry point mixed two jobs: reading and
+// running a line of ML, and being NostOS's console (intercepting `help`, picking
+// a verb table by station, wording an error as "isn't a command on this
+// terminal"). The first job is the language. The second belongs to whoever is
+// hosting it. `createInterpreter` takes the second as OPTIONS, so the game
+// passes its four station tables and its wording, and the command-line REPL
+// passes almost nothing.
+//
+// THE RULE THE HOOKS FOLLOW, and it is the one M2 arrived at: the language calls
+// host policy, it never reads host tables. Every hook below is a question the
+// language asks and the host answers. None of them lets the host reach in.
+
+import { RonmlError, RonmlRaise } from './errors.js';
+import { tokenize } from './lex.js';
+import { parse, joinProgramLines } from './parse.js';
+import { evalNode, formatValue, combineOutput, beginRun, setOut } from './eval.js';
+import { typeOf, remember } from './types.js';
+import { diagnose } from './diag.js';
+import { PRELUDE } from './basis.js';
+import { PRIMITIVES } from './prims.js';
+
+// SML'S TOP-LEVEL ANSWER. Standard ML replies `val it = 7 : int` — the name it
+// bound, the value, and the type. A declaration already names itself (`val f =
+// <fn>`, `datatype t = A | B`), so only a bare expression needs `it` put in
+// front of it. Pure, so the shape can be tested without a terminal to type at.
+const DECLARES = /^(val|fun|datatype|type|exception|signature|structure|functor) /;
+export function smlEcho(text, ty) {
+  if (!text) return [];
+  // No type to show (the checker is off, or it could not say): print as before.
+  if (!ty || ty.startsWith('TYPE:')) return [text];
+  const [tyOnly, warn] = ty.split('    WARNING: ');
+  const line = DECLARES.test(text) ? `${text} : ${tyOnly}` : `val it = ${text} : ${tyOnly}`;
+  return warn ? [line, `  WARNING: ${warn}`] : [line];
+}
+
+/**
+ * Make an interpreter.
+ *
+ * opts.builtins    the host's verbs. An object, or a function (hostCtx) => object
+ *                  when the host serves several different sets — NostOS picks by
+ *                  station, so it passes the function.
+ * opts.typecheck   'off'    — do not run the checker at all
+ *                  'report' — infer, name a clash, run the line anyway
+ *                  'strict' — refuse a line that does not typecheck (SML's own
+ *                             behaviour, and the default here)
+ * opts.session     an existing bindings object to continue in, if the host is
+ *                  keeping one of its own.
+ * opts.hooks       host policy, all optional:
+ *   unknownName(name, hostCtx)  -> string | null
+ *       A bare word at the top level that is not bound, not a constructor and
+ *       not a verb. Return the message to use, or null to take the language's
+ *       own ("unbound variable: x"). NostOS answers "that is a HERMES command,
+ *       not an obelisk one", and answers null inside a machine's own program,
+ *       where a bare word is the intent it chose rather than a typo.
+ *   needsMoreArgs(fnValue, hostCtx) -> string | null
+ *       A line whose whole result is a partly-applied verb. The host usually
+ *       knows how the verb is meant to be called.
+ */
+export function createInterpreter(opts = {}) {
+  const typecheck = opts.typecheck || 'strict';
+  // The language's own primitives first, the host's verbs over the top. A host
+  // may shadow one by name; NostOS does not, but the order says which wins.
+  // Before v1.288 there were no language primitives at all and `hd` was a game
+  // verb, so the prelude could not load without the game.
+  const hostBuiltins = typeof opts.builtins === 'function'
+    ? opts.builtins
+    : () => (opts.builtins || {});
+  // opts.primitives: false lets a host that does its OWN filtering supply the
+  // set itself. NostOS does: it hands each station a different slice, so an
+  // obelisk control terminal has no `explode` and never did. Such a host is
+  // expected to source the definitions from prims.js rather than write its own,
+  // and the adapter does.
+  const usePrims = opts.primitives !== false;
+  const builtinsFor = (hostCtx) => (usePrims
+    ? { ...PRIMITIVES, ...hostBuiltins(hostCtx) }
+    : hostBuiltins(hostCtx));
+  const hooks = opts.hooks || {};
+  const session = opts.session || {};
+
+  // What the checker makes of a line, as a string to print beside the answer.
+  // Never throws and never refuses: inference here REPORTS, and a name it has
+  // never seen is "anything" rather than an error. Whether the line then runs is
+  // decided by `typecheck`, above, not here.
+  function typeReport(source) {
+    if (typecheck === 'off') return null;
+    try {
+      // Parse with the SESSION's fixity, exactly as run() does below. Reading
+      // the line a second time with a different table is how the checker came to
+      // reject `2 plus 3` after `infix 6 plus`: it saw an application of 2 to
+      // two arguments, which is ill-typed, while the evaluator saw the operator
+      // the user had just declared. Same text, two grammars.
+      const ast = parse(tokenize(String(source)), session.__fixity || undefined);
+      const r = typeOf(ast, session);
+      if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
+      remember(ast, session, r.t);
+      // A warning rides alongside the type rather than replacing it: the line is
+      // well typed and also has a hole in it, and you want to be told both.
+      if (r.warnings && r.warnings.length) return `${r.type}    WARNING: ${r.warnings.join('; ')}`;
+      return r.type;
+    } catch {
+      return null;         // unparseable is the parser's business, not this one's
+    }
+  }
+
+  function run(source, hostCtx) {
+    // The host's context travels untouched to every builtin. The interpreter
+    // adds only what the language itself needs to find: the session it is
+    // running in, so a builtin that binds a name binds it in the right place.
+    const ctx = { ...(hostCtx || {}), session };
+    try {
+      // STRICT MODE. In Standard ML a program that does not typecheck does not
+      // run — that is the whole point of the type system, and until this existed
+      // the honest claim was that the language *infers* types, not that it *is*
+      // typed. Same checker, same message as 'report'; the only difference is
+      // whether the line then runs. Warnings stay warnings under both.
+      if (typecheck === 'strict') {
+        const ty = typeReport(source);
+        if (ty && ty.startsWith('TYPE:')) return { ok: false, text: `ERR: ${ty.slice(6).trim()}` };
+      }
+      const toks = tokenize(source);
+      // Nothing but comments and space is EMPTY INPUT, not a broken command.
+      // In Standard ML a comment is whitespace.
+      if (!toks.length || (toks.length === 1 && toks[0].t === 'EOF')) return { ok: true, text: '' };
+      // The session's fixity table, so `infix 8 OR` on an earlier line changes
+      // how this one reads.
+      const ast = parse(toks, session.__fixity || undefined);
+      const builtins = builtinsFor(hostCtx);
+
+      // A bare word typed as a WHOLE line that is neither a verb nor a known
+      // binding is a typo rather than a value. This fires ONLY at the top level:
+      // arguments still evaluate to atoms exactly as before.
+      if (ast && ast.type === 'Var' && /^[a-z][a-z0-9]*$/i.test(ast.name)) {
+        const lower = ast.name.toLowerCase();
+        const bound = Object.prototype.hasOwnProperty.call(session, lower);
+        const cons = session.__cons || {};
+        const isCon = Object.prototype.hasOwnProperty.call(cons, ast.name);
+        if (!bound && !isCon && !builtins[lower]
+            && lower !== 'true' && lower !== 'false' && lower !== 'nil') {
+          const said = hooks.unknownName ? hooks.unknownName(ast.name, hostCtx) : undefined;
+          // undefined means "no opinion, use the language's own words"; null
+          // means "let it through", which is what a machine's own program wants,
+          // where a bare word is the intent it chose.
+          if (said) return { ok: false, text: `ERR: ${said}` };
+          if (said === undefined) return { ok: false, text: `ERR: unbound variable: ${ast.name}` };
+        }
+      }
+
+      // Fresh output buffer for this line: `echo` pushes into it mid-evaluation,
+      // so a `;`-sequence or a recursive echo prints every step rather than only
+      // the final value.
+      const out = [];
+      setOut(out);
+      beginRun(hostCtx && hostCtx.fuel);
+      const result = evalNode(ast, session, ctx, builtins);
+      if (result && result.tag === 'fn') {
+        const hint = hooks.needsMoreArgs && hooks.needsMoreArgs(result, hostCtx);
+        return { ok: false, text: `ERR: ${hint || `${result.name} needs more arguments`}` };
+      }
+      // NOT `{..., value: result}`, though §4 of the plan sketches it that way.
+      // A closure's value holds the environment it captured, which holds the
+      // closure, so any caller that stringifies a result hits a cycle — one did
+      // the moment it was added. When something actually needs the raw value it
+      // can have a separate call that says so.
+      return { ok: true, text: combineOutput(out, result) };
+    } catch (e) {
+      if (e instanceof RonmlRaise) {
+        return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}` };
+      }
+      // A JavaScript stack overflow means one thing here: a program that
+      // recursed without ever coming back. The step budget is supposed to catch
+      // that first, but the two are in a race — a deeply nested (non-tail)
+      // recursion uses several host frames per step, so on a small stack the
+      // host loses. Report it as what it is rather than leaking the engine's own
+      // words.
+      if (e instanceof RangeError && /call stack/i.test(e.message || '')) {
+        return { ok: false, text: 'ERR: step budget exceeded — this recursion never comes back' };
+      }
+      // If the line is a piece of Standard ML this build does not have, say
+      // which piece, because the parser's own message names the character it
+      // choked on and that helps nobody.
+      const why = diagnose(source);
+      if (why) return { ok: false, text: `ERR: ${why}` };
+      if (e instanceof RonmlError) return { ok: false, text: `ERR: ${e.message}` };
+      return { ok: false, text: `ERR: ${e.message || 'malformed command'}` };
+    }
+  }
+
+  // Load the standard library into this session. Cheap enough to do on the first
+  // line typed, and skipped afterwards. A prelude line that fails is a bug in
+  // the prelude rather than a player error, so it is swallowed here — and walked
+  // by a test, because swallowed also means invisible.
+  function loadPrelude(hostCtx) {
+    if (session.__prelude) return;
+    session.__prelude = true;
+    for (const line of joinProgramLines(PRELUDE)) {
+      try { run(line, hostCtx); } catch { /* see above */ }
+    }
+  }
+
+  return { run, typeReport, loadPrelude, smlEcho, session, typecheck };
+}

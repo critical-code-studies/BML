@@ -26,20 +26,23 @@
 import { typeOf, remember } from '../lang/types.js';
 import {
   evalNode, applyValue, formatValue, describeValue, combineOutput,
-  beginRun, setHostNameHint,
+  beginRun, setHostNameHint, setOut, pushOut,
 } from '../lang/eval.js';
+import { createInterpreter, smlEcho } from '../lang/interp.js';
+import { PRELUDE } from '../lang/basis.js';
+import { PRIMITIVES } from '../lang/prims.js';
+import { diagnose, NOT_FITTED_SAMPLES } from '../lang/diag.js';
+
+// Re-exported, never redefined: seven files import these names from here, and
+// the standing rule is that the adapter re-exports. Two definitions of one
+// thing is how the diagnostic list went stale six times.
+export { smlEcho, PRELUDE, diagnose, NOT_FITTED_SAMPLES };
 
 const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
 
 export { RonmlError, RonmlFuelError, RonmlRaise } from '../lang/errors.js';
 import { RonmlError, RonmlFuelError, RonmlRaise } from '../lang/errors.js';
 
-// The current run's print buffer. `echo` pushes into it as it evaluates and the
-// two entry points (runRonml / runStar) install a fresh one per line, so output
-// arrives in order even from deep inside a recursion. Module-level on purpose:
-// closures capture the ctx of the line that defined them, so a per-ctx buffer
-// silently swallowed output from any function called on a LATER line.
-let OUT = null;
 
 
 // ---- The language proper lives in src/lang/ --------------------------------
@@ -113,6 +116,12 @@ const COPY_FILE = {
 
 function makeBuiltins(station) {
   const B = {
+    // The language's own primitives, sourced from src/lang/prims.js rather than
+    // written again here. They used to be defined in this object, which meant
+    // BML could not load its own prelude without the game (v1.288, M4). The
+    // station filters below still decide which stations get them: an obelisk
+    // control terminal has no `explode` and never did.
+    ...PRIMITIVES,
     scan: {
       arity: 0,
       fn: (_args, ctx) => ({ tag: 'list', items: ctx.listObelisks().map((id) => ({ tag: 'node', id })) }),
@@ -247,13 +256,6 @@ function makeBuiltins(station) {
     // captures the ctx of the line that DEFINED it, and the hub builds a fresh ctx
     // per command, so `let f = fn x => echo x` on one line and `f "hi"` on the next
     // pushed into the previous line's dead buffer and printed nothing.
-    echo: {
-      arity: 1,
-      fn: ([x]) => {
-        if (OUT) OUT.push(formatValue(x));
-        return { tag: 'unit' };
-      },
-    },
     // ---- taking a list apart ------------------------------------------
     // The language could make lists from the day it had `scan`, and could do
     // nothing with one: a program could be handed a list and had no way in.
@@ -264,14 +266,8 @@ function makeBuiltins(station) {
     // ---- the little that stands in for a standard library ------------
     // A machine with no floating-point unit and no printer does not get one,
     // but these five come up in every worked example and cost nothing.
-    abs: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: n.tag, v: Math.abs(n.v) }; } },
-    sqrt: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); if (n.v < 0) throw new RonmlError('sqrt of a negative'); return { tag: 'real', v: Math.sqrt(n.v) }; } },
     // int and real do not mix, so there have to be ways across.
-    real: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'real', v: n.v }; } },
-    floor: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'int', v: Math.floor(n.v) }; } },
     // characters
-    ord: { arity: 1, fn: ([c]) => { if (!c || c.tag !== 'char') throw new RonmlError(`${describeValue(c)} is not a character`); return { tag: 'int', v: c.v.charCodeAt(0) }; } },
-    chr: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'char', v: String.fromCharCode(n.v) }; } },
     // WHAT THE CARD CAN HEAR. Not the control wire — this is the NostBook's own
     // wireless card reading traffic off the air, the same table `arp -a` prints.
     // A machine broadcasts to its tower whether or not anyone is listening, so
@@ -291,45 +287,7 @@ function makeBuiltins(station) {
         })),
       }),
     },
-    str: { arity: 1, fn: ([c]) => { if (!c || c.tag !== 'char') throw new RonmlError(`${describeValue(c)} is not a character`); return { tag: 'str', v: c.v }; } },
-    explode: { arity: 1, fn: ([x]) => { if (!x || x.tag !== 'str') throw new RonmlError(`${describeValue(x)} is not a string`); return { tag: 'list', items: [...x.v].map((ch) => ({ tag: 'char', v: ch })) }; } },
-    implode: { arity: 1, fn: ([l]) => { if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`); return { tag: 'str', v: l.items.map((c) => (c && c.tag === 'char' ? c.v : formatValue(c))).join('') }; } },
-    min: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('min needs two numbers'); return { tag: a.tag, v: Math.min(a.v, b.v) }; } },
-    max: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('max needs two numbers'); return { tag: a.tag, v: Math.max(a.v, b.v) }; } },
-    size: { arity: 1, fn: ([x]) => { if (x && x.tag === 'str') return { tag: 'int', v: x.v.length }; if (x && x.tag === 'list') return { tag: 'int', v: x.items.length }; throw new RonmlError(`${describeValue(x)} has no size`); } },
     // A cell whose contents can be replaced. The only mutable thing here.
-    ref: { arity: 1, fn: ([v]) => ({ tag: 'ref', cell: { v } }) },
-    hd: {
-      arity: 1,
-      fn: ([l]) => {
-        if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`);
-        if (!l.items.length) throw new RonmlError('hd: the list is empty. Check with length first.');
-        return l.items[0];
-      },
-    },
-    tl: {
-      arity: 1,
-      fn: ([l]) => {
-        if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`);
-        if (!l.items.length) throw new RonmlError('tl: the list is empty. Check with length first.');
-        return { tag: 'list', items: l.items.slice(1) };
-      },
-    },
-    length: {
-      arity: 1,
-      fn: ([l]) => {
-        if (l && l.tag === 'str') return { tag: 'int', v: String(l.v).length };
-        if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} has no length`);
-        return { tag: 'int', v: l.items.length };
-      },
-    },
-    not: {
-      arity: 1,
-      fn: ([b]) => {
-        if (!b || b.tag !== 'bool') throw new RonmlError(`${describeValue(b)} is not true or false`);
-        return { tag: 'bool', v: !b.v };
-      },
-    },
     // ---- a machine's own senses (docs/robot-programs-plan.md §2) ----------
     // Nullary builtins reading the unit's state off ctx.sense. Functions, not
     // fields, so the language needs no records and no `.` accessor — and being
@@ -877,7 +835,7 @@ function runStar(rest, ctx) {
     return { ok: false, text: `ERR: no such command: ${toks[0].v}. type help for the list.` };
   }
   const out = [];
-  OUT = out;   // so *echo prints through the same buffer as bare echo
+  setOut(out);   // so *echo prints through the same buffer as bare echo
   beginRun(ctx && ctx.fuel);
   const argVals = toks.slice(1).map(litTokenToValue);
   try {
@@ -960,29 +918,8 @@ export function decide(program, sense, opts = {}) {
 //
 // Pure, ordered most specific first, and returns null when nothing is
 // recognised so the parser's own message stands.
-const NOT_FITTED = [
-  // A test walks this list and asserts every pattern here still FAILS to parse.
-  // That is the only thing that has stopped it going stale: it went on refusing
-  // modules, exceptions, chars, local and refs after each of them shipped, six
-  // times, and every time it fired before the parser and hid the real error.
-  // `infix`/`infixr`/`nonfix`/`op` were here until v1.277 added them, and
-  // String/List/Int/Option were here until v1.257 added them. Both pruned by
-  // the test below, which is the only thing that has ever kept this honest.
-  [/\b(Word|Array|Vector|IO|TextIO|OS|Math|Substring|General)\./, 'that library is not on this machine. ml -full lists what is.'],
-  [/^\s*(abstype|open)\b/, 'no abstype and no open on this build.'],
-];
 
-// The samples the test uses, one per rule above, in the same order.
-// One sample per rule in NOT_FITTED, walked by a test that checks each is
-// still genuinely refused. `Char.ord c` left this list at v1.285, when the
-// prelude gained Char and Real; `Array.sub` replaces it as a structure that
-// really is absent.
-export const NOT_FITTED_SAMPLES = ['Array.sub (a, 0)', 'open List'];
 
-export function diagnose(src) {
-  for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;
-  return null;
-}
 
 // Split a program file into the logical lines the parser expects, KEEPING the
 // physical line each one started on, so an error can say where. See
@@ -992,212 +929,11 @@ export function diagnose(src) {
 // What the type checker makes of a line, as a string to print beside the
 // answer. Never throws and never refuses: inference here REPORTS. A machine in
 // a name it has never seen is "anything" rather than an error.
-// THE LIBRARY, written in the language it is for.
-//
-// It is loaded as source rather than built as JavaScript builtins, so `List.map`
-// is the same map a player would write and can be read with the same eyes. The
-// structures are the ones the manuals name, minus everything this build has no
-// way to do.
-export const PRELUDE = [
-  "datatype 'a option = NONE | SOME of 'a",
-  'datatype order = LESS | EQUAL | GREATER',
-  '',
-  '(* Composition and sequencing. Standard ML has these infix in the top-level',
-  '   environment, so the fixity is declared here rather than seeded into the',
-  '   parser: fixity is a fact about a program, and a program that wants `o`',
-  '   for something else can say `nonfix o` and have it. *)',
-  'fun o (f, g) = fn x => f (g x)',
-  'infixr 3 o',
-  'fun before (a, b) = a',
-  'infix 0 before',
-  'fun ignore _ = ()',
-  '',
-  'structure List = struct',
-  '  fun null nil = true | null _ = false',
-  '  fun map f nil = nil | map f (h :: t) = f h :: map f t',
-  '  fun filter p nil = nil',
-  '    | filter p (h :: t) = if p h then h :: filter p t else filter p t',
-  '  fun foldl f b nil = b | foldl f b (h :: t) = foldl f (f h b) t',
-  '  fun foldr f b nil = b | foldr f b (h :: t) = f h (foldr f b t)',
-  '  fun rev l = foldl (fn h => fn a => h :: a) nil l',
-  '  fun exists p nil = false | exists p (h :: t) = p h orelse exists p t',
-  '  fun all p nil = true | all p (h :: t) = p h andalso all p t',
-  '  fun find p nil = NONE',
-  '    | find p (h :: t) = if p h then SOME h else find p t',
-  '  fun app f nil = () | app f (h :: t) = (f h; app f t)',
-  '  fun last (h :: nil) = h | last (h :: t) = last t',
-  '  fun nth (h :: t, n) = if n = 0 then h else nth (t, n - 1)',
-  '  fun take (l, n) = if n = 0 then nil else hd l :: take (tl l, n - 1)',
-  '  fun drop (l, n) = if n = 0 then l else drop (tl l, n - 1)',
-  '  fun concat nil = nil | concat (h :: t) = h @ concat t',
-  '  fun tabulate (n, f) = if n = 0 then nil else tabulate (n - 1, f) @ [f (n - 1)]',
-  '  (* partition returns the pair (kept, rejected), in the original order. *)',
-  '  fun partition p nil = (nil, nil)',
-  '    | partition p (h :: t) =',
-  '        let val (y, n) = partition p t',
-  '        in if p h then (h :: y, n) else (y, h :: n) end',
-  '  (* zip stops at the shorter list, as ListPair.zip does. *)',
-  '  fun zip (nil, _) = nil',
-  '    | zip (_, nil) = nil',
-  '    | zip (a :: as1, b :: bs) = (a, b) :: zip (as1, bs)',
-  '  fun unzip nil = (nil, nil)',
-  '    | unzip ((a, b) :: t) = let val (x, y) = unzip t in (a :: x, b :: y) end',
-  'end',
-  '',
-  'structure ListPair = struct',
-  '  val zip = List.zip',
-  '  val unzip = List.unzip',
-  'end',
-  '',
-  'structure Char = struct',
-  '  fun isDigit c = ord c >= 48 andalso ord c <= 57',
-  '  fun isUpper c = ord c >= 65 andalso ord c <= 90',
-  '  fun isLower c = ord c >= 97 andalso ord c <= 122',
-  '  fun isAlpha c = isUpper c orelse isLower c',
-  '  fun isAlphaNum c = isAlpha c orelse isDigit c',
-  '  fun isSpace c = ord c = 32 orelse ord c = 9 orelse ord c = 10',
-  '  fun toUpper c = if isLower c then chr (ord c - 32) else c',
-  '  fun toLower c = if isUpper c then chr (ord c + 32) else c',
-  '  fun toString c = "" ^ c',
-  '  fun compare (a, b) = Int.compare (ord a, ord b)',
-  'end',
-  '',
-  'structure String = struct',
-  '  fun size s = length (explode s)',
-  '  fun sub (s, n) = List.nth (explode s, n)',
-  '  fun map f s = implode (List.map f (explode s))',
-  '  fun rev s = implode (List.rev (explode s))',
-  '  fun concat nil = "" | concat (h :: t) = h ^ concat t',
-  '  fun isPrefix (p, s) = List.take (explode s, size p) = explode p',
-  '  fun substring (s, i, n) = implode (List.take (List.drop (explode s, i), n))',
-  '  fun extract (s, i, NONE) = implode (List.drop (explode s, i))',
-  '    | extract (s, i, SOME n) = substring (s, i, n)',
-  '  (* translate maps each character to a STRING and joins the results, which',
-  '     is what lets it delete and expand as well as replace. *)',
-  '  fun translate f s = concat (List.map f (explode s))',
-  '  fun concatWith sep nil = ""',
-  '    | concatWith sep (h :: nil) = h',
-  '    | concatWith sep (h :: t) = h ^ sep ^ concatWith sep t',
-  '  (* tokens splits on every character the predicate accepts and DROPS empty',
-  '     fields; fields keeps them. That is the only difference between them. *)',
-  '  fun fields p s =',
-  '        let fun go (nil, cur) = [implode (List.rev cur)]',
-  '              | go (c :: t, cur) =',
-  '                  if p c then implode (List.rev cur) :: go (t, nil)',
-  '                  else go (t, c :: cur)',
-  '        in go (explode s, nil) end',
-  '  fun tokens p s = List.filter (fn f => f <> "") (fields p s)',
-  '  fun toString s = s',
-  '  val explode = explode',
-  '  val implode = implode',
-  '  (* compare walks the two strings together and answers at the first',
-  '     character that differs; a prefix is LESS than what extends it. *)',
-  '  fun compare (a, b) =',
-  '        let fun go (nil, nil) = EQUAL',
-  '              | go (nil, _) = LESS',
-  '              | go (_, nil) = GREATER',
-  '              | go (x :: xs, y :: ys) =',
-  '                  case Char.compare (x, y) of',
-  '                    EQUAL => go (xs, ys)',
-  '                  | r => r',
-  '        in go (explode a, explode b) end',
-  'end',
-  '',
-  'structure Int = struct',
-  '  fun abs n = if n < 0 then 0 - n else n',
-  '  fun min (a, b) = if a < b then a else b',
-  '  fun max (a, b) = if a > b then a else b',
-  '  fun toString n = "" ^ n',
-  '  fun compare (a, b) = if a < b then LESS else if a > b then GREATER else EQUAL',
-  '  fun sign n = if n < 0 then ~1 else if n > 0 then 1 else 0',
-  '  (* fromString answers an option: a string that is not a numeral is not an',
-  '     error, it is simply NONE, and the caller decides what that means. *)',
-  '  fun fromString s =',
-  '        let fun digits (nil, acc, seen) = if seen then SOME acc else NONE',
-  '              | digits (c :: t, acc, seen) =',
-  '                  if Char.isDigit c then digits (t, acc * 10 + (ord c - 48), true)',
-  '                  else NONE',
-  '        in case explode s of',
-  '             nil => NONE',
-  '           | #"~" :: t => (case digits (t, 0, false) of',
-  '                             SOME n => SOME (0 - n)',
-  '                           | NONE => NONE)',
-  '           | cs => digits (cs, 0, false)',
-  '        end',
-  'end',
-  '',
-  'structure Real = struct',
-  '  fun abs x = if x < 0.0 then 0.0 - x else x',
-  '  fun min (a, b) = if a < b then a else b',
-  '  fun max (a, b) = if a > b then a else b',
-  '  fun fromInt n = real n',
-  '  fun round x = floor (x + 0.5)',
-  '  fun toString x = "" ^ x',
-  'end',
-  '',
-  'structure Bool = struct',
-  '  fun toString true = "true" | toString false = "false"',
-  '  fun fromString "true" = SOME true',
-  '    | fromString "false" = SOME false',
-  '    | fromString _ = NONE',
-  '  fun not true = false | not false = true',
-  'end',
-  '',
-  'structure Option = struct',
-  '  fun isSome NONE = false | isSome (SOME _) = true',
-  '  fun valOf (SOME x) = x',
-  '  fun getOpt (NONE, d) = d | getOpt (SOME x, _) = x',
-  '  fun map f NONE = NONE | map f (SOME x) = SOME (f x)',
-  '  fun join NONE = NONE | join (SOME x) = x',
-  '  fun filter p x = if p x then SOME x else NONE',
-  'end',
-].join('\n');
 
 // Load it into a session. Cheap enough to do on the first line typed, and
 // skipped afterwards.
-export function loadPrelude(ctx) {
-  const sess = (ctx && ctx.session) || {};
-  if (sess.__prelude) return;
-  sess.__prelude = true;
-  for (const line of joinProgramLines(PRELUDE)) {
-    try { runRonml(line, ctx); } catch { /* a prelude line that fails is a bug, not a player error */ }
-  }
-}
 
-// SML'S TOP-LEVEL ANSWER. Standard ML replies `val it = 7 : int` — the name it
-// bound, the value, and the type. A declaration already names itself (`val f =
-// <fn>`, `datatype t = A | B`), so only a bare expression needs `it` put in
-// front of it. Pure, so the shape can be tested without a terminal to type at.
-const DECLARES = /^(val|fun|datatype|type|exception|signature|structure|functor) /;
-export function smlEcho(text, ty) {
-  if (!text) return [];
-  // No type to show (the checker is off, or it could not say): print as before.
-  if (!ty || ty.startsWith('TYPE:')) return [text];
-  const [tyOnly, warn] = ty.split('    WARNING: ');
-  const line = DECLARES.test(text) ? `${text} : ${tyOnly}` : `val it = ${text} : ${tyOnly}`;
-  return warn ? [line, `  WARNING: ${warn}`] : [line];
-}
 
-export function typeReport(source, ctx) {
-  if (!ctx || !ctx.types) return null;
-  try {
-    // Parse with the SESSION's fixity, exactly as the evaluator does below.
-    // Reading the line a second time with a different table is how the checker
-    // came to reject `2 plus 3` after `infix 6 plus`: it saw an application of
-    // 2 to two arguments, which is ill-typed, while the evaluator saw the
-    // operator the user had just declared. Same text, two grammars.
-    const ast = parseLine(source, (ctx.session && ctx.session.__fixity) || undefined);
-    const r = typeOf(ast, ctx.session || {});
-    if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
-    remember(ast, ctx.session || {}, r.t);
-    // A warning rides alongside the type rather than replacing it: the line is
-    // well typed and also has a hole in it, and you want to be told both.
-    if (r.warnings && r.warnings.length) return `${r.type}    WARNING: ${r.warnings.join('; ')}`;
-    return r.type;
-  } catch {
-    return null;         // unparseable is the parser's business, not this one's
-  }
-}
 
 // ---- what this build of the language is ------------------------------------
 //
@@ -1346,99 +1082,75 @@ export function aimlFull() {
 
 
 
+// ---- The game's four interpreters ------------------------------------------
+//
+// M3 (v1.288). One interpreter per station, each built through the language's
+// own `createInterpreter` and differing only in the verb table it is given and
+// the wording it supplies for two questions the language asks.
+//
+// THE GAME IS ADVISORY EVERYWHERE, and that is the design rather than a
+// shortcut: a machine in a ruin should say what it worked out and let the
+// operator decide, and a T-1 has neither a checker nor anyone to read one. The
+// NostBook is the exception a player can ask for — see `ml -strict` — because
+// it is the machine you own and the one you practise on.
+//
+// The session is NOT owned here. NostOS keeps a session per terminal on `ctx`
+// so bindings survive between visits, so each call hands the interpreter the
+// session for the line being run. `interpreterFor` therefore makes a fresh
+// wrapper per call, which is cheap: the state lives in ctx.session either way.
+function interpreterFor(ctx) {
+  return createInterpreter({
+    session: (ctx && ctx.session) || {},
+    typecheck: (ctx && ctx.typecheck) || 'off',
+    primitives: false,   // the station filters below already supply them
+    builtins: () => makeBuiltins(ctx && ctx.station),
+    hooks: {
+      // A bare word that is not bound and not a verb HERE. Inside a machine's
+      // own program it is the intent the machine chose (`patrol`), not a typo,
+      // so answer null and let it through as a value.
+      unknownName(name, hostCtx) {
+        if (hostCtx && hostCtx.station === 'robot') return null;
+        const lower = String(name).toLowerCase();
+        if (hostCtx && hostCtx.station && ALL_VERBS.has(lower)) {
+          return notHereMessage(name, hostCtx.station);
+        }
+        return `no such command: ${name}. type help for the list.`;
+      },
+      needsMoreArgs(fnValue) {
+        return USAGE_HINTS[fnValue.name] || `${fnValue.name} needs more arguments`;
+      },
+    },
+  });
+}
+
+// Load the standard library into a session. Kept as a free function because
+// main.js, the tests and the boot path all call it with a ctx rather than an
+// interpreter.
+export function loadPrelude(ctx) {
+  interpreterFor(ctx).loadPrelude(ctx);
+}
+
+// What the checker makes of a line. `ctx.types` is the game's switch for
+// whether the NostBook shows types at all; the language's own switch is
+// `typecheck`, which the game leaves at 'off' for the machines.
+export function typeReport(source, ctx) {
+  if (!ctx || !ctx.types) return null;
+  return createInterpreter({
+    session: (ctx && ctx.session) || {},
+    typecheck: 'report',
+  }).typeReport(source);
+}
+
 export function runRonml(source, ctx) {
   // `help` is a console meta-command, not a language expression — intercept it
   // before evaluation so a bare `help` prints the reference instead of failing
-  // as an unknown name. `help <verb>` gives detail on one verb. (`notes` is a
-  // real builtin now — see makeBuiltins — since it opens a UI overlay rather
-  // than printing text.)
+  // as an unknown name. `help <verb>` gives detail on one verb.
   const trimmed = source.trim();
   if (trimmed === 'help' || trimmed.startsWith('help ')) {
     return { ok: true, text: helpText(trimmed.slice(4).trim(), ctx && ctx.station, ctx && ctx.hasManual) };
   }
-  // `*command` — the BBC-Micro command form, run with literal arguments. Anything
-  // without a leading `*` is an AI-ML expression (let / pipes / values / lambdas).
+  // `*command` — the BBC-Micro command form, run with literal arguments.
+  // Anything without a leading `*` is an AI-ML expression.
   if (trimmed.startsWith('*')) return runStar(trimmed.slice(1), ctx);
-  try {
-    // STRICT MODE. In Standard ML a program that does not typecheck does not
-    // run — that is the whole point of the type system, and until this existed
-    // the honest claim was that AI-ML *infers* types, not that it *is* typed.
-    //
-    // The game stays advisory everywhere (`report`): a machine in a ruin should
-    // say what it worked out and let the operator decide, and a T-1 has neither
-    // a checker nor anyone to read it. `strict` is for the standalone REPL.
-    // Same checker, same message; the only difference is whether the line then
-    // runs. Warnings (exhaustiveness) stay warnings under both.
-    if (ctx && ctx.typecheck === 'strict') {
-      const ty = typeReport(source, { ...ctx, types: true });
-      if (ty && ty.startsWith('TYPE:')) {
-        return { ok: false, text: `ERR: ${ty.slice(6).trim()}` };
-      }
-    }
-    const toks = tokenize(source);
-    // Nothing but comments and space is EMPTY INPUT, not a broken command. The
-    // parser reported `unexpected end of command` for a line holding only a
-    // `(* … *)`, so pasting a commented program produced one error per comment.
-    // In Standard ML a comment is whitespace.
-    if (!toks.length || (toks.length === 1 && toks[0].t === 'EOF')) return { ok: true, text: '' };
-    // The session's fixity table, so `infix 8 OR` on an earlier line changes how
-    // this one reads.
-    const ast = parse(toks, (ctx && ctx.session && ctx.session.__fixity) || undefined);
-    const builtins = makeBuiltins(ctx && ctx.station);
-    // A bare word typed as a WHOLE command that is neither a verb nor a known
-    // binding is a typo, not a value — say so (and let the error chime play),
-    // instead of echoing it back with the success chime as if it ran. This fires
-    // ONLY at the top level: arguments (aikey, map, OB_XXXX, filenames) still
-    // evaluate to atoms exactly as before.
-    // A plain word (no hyphen, no dot) is command-shaped; a hyphenated node code
-    // (OB_XXXX) or a dotted filename (foo.ml) is a legitimate bare VALUE and is
-    // left alone.
-    // ...but NOT in a machine's own program, where a bare word is the intent it
-    // chose (`patrol`), not a mistyped command.
-    if (ast && ast.type === 'Var' && /^[a-z][a-z0-9]*$/i.test(ast.name)
-        && !(ctx && ctx.station === 'robot')) {
-      const lower = ast.name.toLowerCase();
-      const bound = Object.prototype.hasOwnProperty.call((ctx && ctx.session) || {}, lower);
-      const declared = (ctx && ctx.session && ctx.session.__cons) || {};
-      const isCon = Object.prototype.hasOwnProperty.call(declared, ast.name);
-      if (!bound && !isCon && !builtins[lower] && lower !== 'true' && lower !== 'false' && lower !== 'nil') {
-        if (ctx && ctx.station && ALL_VERBS.has(lower)) {
-          return { ok: false, text: `ERR: ${notHereMessage(ast.name, ctx.station)}` };
-        }
-        return { ok: false, text: `ERR: no such command: ${ast.name}. type help for the list.` };
-      }
-    }
-    // Fresh output buffer for this line: `echo` pushes into it mid-evaluation, so a
-    // `;`-sequence or a recursive echo prints every step, not just the final value.
-    const out = [];
-    OUT = out;
-    beginRun(ctx && ctx.fuel);
-    // Base env is the persistent session (main.js passes ctx.session) so bare
-    // top-level `let`/`copy` bindings survive to the next line entered.
-    const result = evalNode(ast, (ctx && ctx.session) || {}, ctx, builtins);
-    if (result && result.tag === 'fn') {
-      return { ok: false, text: `ERR: ${USAGE_HINTS[result.name] || `${result.name} needs more arguments`}` };
-    }
-    return { ok: true, text: combineOutput(out, result) };
-  } catch (e) {
-    // If the line is a piece of Standard ML this build does not have, say
-    // which piece. The parser's own message names the character it choked
-    // on, which for a signature block is a colon, and that helps nobody.
-    if (e instanceof RonmlRaise) {
-      return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}` };
-    }
-    // A JavaScript stack overflow means one thing here: a program that recursed
-    // without ever coming back. The step budget is supposed to catch that first,
-    // but the two are in a race — a deeply nested (non-tail) recursion uses
-    // several host frames per AI-ML step, so on a small stack the host loses.
-    // Report it as what it is rather than leaking the engine's own words, and
-    // the fault a machine shows is the same either way.
-    if (e instanceof RangeError && /call stack/i.test(e.message || '')) {
-      return { ok: false, text: 'ERR: step budget exceeded — this recursion never comes back' };
-    }
-    const why = diagnose(source);
-    if (why) return { ok: false, text: `ERR: ${why}` };
-    if (e instanceof RonmlError) return { ok: false, text: `ERR: ${e.message}` };
-    return { ok: false, text: `ERR: ${e.message || 'malformed command'}` };
-  }
+  return interpreterFor(ctx).run(source, ctx);
 }

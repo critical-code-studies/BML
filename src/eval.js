@@ -34,6 +34,16 @@ export function beginRun(fuel) {
   FUEL = fuel || CONSOLE_FUEL;
 }
 
+// The current run's print buffer. `echo` pushes into it as evaluation proceeds
+// and every entry point installs a fresh one per line, so output arrives in
+// order even from deep inside a recursion. Module-level for the same reason the
+// fuel counters are: closures capture the ctx of the line that DEFINED them, so
+// a per-ctx buffer silently swallowed the output of any function called on a
+// LATER line. That was a real bug.
+let OUT = null;
+export function setOut(buf) { OUT = buf; }
+export function pushOut(text) { if (OUT) OUT.push(text); }
+
 // What the HOST wants said about a name the language does not know. The
 // language has no verbs; NostOS does, and wants "that is a HERMES command, not
 // an obelisk one" rather than "no such name". Installed once by the adapter.

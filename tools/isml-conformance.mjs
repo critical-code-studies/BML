@@ -26,7 +26,12 @@
 // defining `=` into `==`. Both times the score dropped and the language was
 // fine. Before believing a regression here, check the translator.
 
-import { runRonml, loadPrelude } from '../src/game/ai_ml.js';
+// M4 (v1.288): imports the LANGUAGE, not the game. The harness measures how
+// much Standard ML this implementation runs, so pulling it through the game's
+// console adapter meant measuring the adapter too — its station verb tables
+// were in scope, and a corpus declaration that happened to name one got the
+// game's wording instead of the language's.
+import { createInterpreter } from '../src/lang/index.js';
 import fs from 'fs';
 
 // ---- Splitting source into top-level declarations --------------------------
@@ -200,13 +205,16 @@ const report = [];
 for (const f of files) {
   const src = fs.readFileSync(`${DIR}/${f}`, 'utf8');
   const ds = decls(src);
-  // LOAD THE LIBRARY. Until v1.285 this line did not, so every declaration in
+  // LOAD THE LIBRARY. Until v1.285 this did not happen, so every declaration in
   // the corpus calling List.find or String.tokens failed on a name the build
-  // actually had, and the whole of L-G measured as zero gain. The in-game
-  // terminal loads the prelude on its first line; the instrument must do what
-  // the thing it measures does.
-  const ctx = { station: 'laptop', session: {} };
-  loadPrelude(ctx);
+  // actually had. The instrument must do what the thing it measures does.
+  //
+  // ADVISORY, not strict. The corpus is measured on whether the language can
+  // READ and RUN each declaration; refusing well-formed code because inference
+  // is incomplete here would measure the checker rather than the language, and
+  // would move the number for a reason that has nothing to do with Harper.
+  const interp = createInterpreter({ typecheck: 'off' });
+  interp.loadPrelude();
   let attempted = 0, ok = 0, skipped = 0;
   const errs = [];
   for (const d of ds) {
@@ -214,7 +222,7 @@ for (const f of files) {
     if (t === null) { skipped++; continue; }
     attempted++;
     let r;
-    try { r = runRonml(t, ctx); } catch (e) { r = { text: `ERR: ${e.message}` }; }
+    try { r = interp.run(t); } catch (e) { r = { text: `ERR: ${e.message}` }; }
     if (String(r.text).startsWith('ERR')) errs.push([t.slice(0, 58), String(r.text).replace(/^ERR:\s*/, '').slice(0, 46)]);
     else ok++;
   }

@@ -6,23 +6,23 @@
 //   node bin/bml.js --sloppy     advisory: a clash is named and the line still runs
 //   node bin/bml.js file.ml …    run files, then exit (add -i to stay at the prompt)
 //
-// AI-ML created by David M. Berry, 2026. Based on Standard ML developed by
+// BML created by David M. Berry, 2026. Based on Standard ML developed by
 // Robin Milner, Mads Tofte, and Robert Harper. Many thanks to Robert Harper for
 // the inspiration in his book "Introduction to Standard ML" (1986), and to Åke
 // Wikström for "Functional Programming Using Standard ML" (1987).
 //
-// This is the language out of the game it grew in. It shares one interpreter
-// with the NostBook's `ml`, and the only difference is the mode: the game is
-// advisory everywhere, because a machine in a ruin should say what it worked
-// out and let the operator decide. Here the default is strict, because that is
-// what makes it an ML.
+// This file imports src/lang/ and nothing else: no game, no stations, no verbs.
+// It builds one interpreter through the same `createInterpreter` NostOS uses,
+// and differs from the game only in what it passes — strict rather than
+// advisory, and no host hooks at all. The game is advisory everywhere because a
+// machine in a ruin should say what it worked out and let the operator decide.
 
 import readline from 'node:readline';
 import fs from 'node:fs';
 import {
-  runRonml, typeReport, smlEcho, loadPrelude,
-  AIML_NAME, AIML_VERSION, AIML_CREDIT, joinProgram,
-} from '../src/game/ai_ml.js';
+  createInterpreter, smlEcho, joinProgram,
+  BML_NAME, BML_VERSION, BML_CREDIT,
+} from '../src/lang/index.js';
 
 const argv = process.argv.slice(2);
 const sloppy = argv.includes('--sloppy');
@@ -31,7 +31,7 @@ const files = argv.filter((a) => !a.startsWith('-'));
 
 if (argv.includes('--help') || argv.includes('-h')) {
   console.log([
-    `${AIML_NAME} ${AIML_VERSION} — a little Standard ML`,
+    `${BML_NAME} ${BML_VERSION} — a little Standard ML`,
     '',
     '  bml                 strict repl (ill-typed lines are refused)',
     '  bml --sloppy        advisory repl (a clash is named; the line runs)',
@@ -43,20 +43,17 @@ if (argv.includes('--help') || argv.includes('-h')) {
     '  :t <expr>           show a type without evaluating',
     '  :quit               leave (or ^D)',
     '',
-    ...AIML_CREDIT.map((l) => `  ${l}`),
+    ...BML_CREDIT.map((l) => `  ${l}`),
   ].join('\n'));
   process.exit(0);
 }
 
-// One session for the whole run: bindings, fixity and datatypes persist from
-// line to line, as they do at any ML top level.
-const ctx = {
-  station: 'laptop',
-  session: {},
-  types: true,
-  typecheck: sloppy ? 'report' : 'strict',
-};
-await loadPrelude(ctx);
+// One interpreter for the whole run: bindings, fixity and datatypes persist
+// from line to line, as they do at any ML top level. No station, no verbs, no
+// host hooks — this is the language with nothing else attached, which is the
+// point of the file.
+const bml = createInterpreter({ typecheck: sloppy ? 'report' : 'strict' });
+bml.loadPrelude();
 
 // Run one line and print what Standard ML would print. Returns false if the
 // line was refused, so a file can stop at its first error rather than pressing
@@ -66,7 +63,7 @@ function step(src) {
   if (!line) return true;
   if (line === ':quit' || line === ':q') return null;
   if (line.startsWith(':t ')) {
-    const t = typeReport(line.slice(3), ctx);
+    const t = bml.typeReport(line.slice(3));
     console.log(t || 'no type: the checker could not read that');
     return true;
   }
@@ -74,8 +71,8 @@ function step(src) {
   const use = line.match(/^use\s+"([^"]+)"\s*;?$/);
   if (use) return runFile(use[1]);
 
-  const ty = typeReport(line, ctx);
-  const r = runRonml(line, ctx);
+  const ty = bml.typeReport(line);
+  const r = bml.run(line);
   if (!r.ok) { console.log(r.text); return false; }
   for (const out of smlEcho(r.text, ty)) console.log(out);
   return true;
@@ -98,7 +95,7 @@ let failed = false;
 for (const f of files) { if (!runFile(f)) failed = true; }
 if (files.length && !forceRepl) process.exit(failed ? 1 : 0);
 
-console.log(`${AIML_NAME} ${AIML_VERSION}${sloppy ? '  (advisory)' : ''}   :quit to leave, :t for a type`);
+console.log(`${BML_NAME} ${BML_VERSION}${sloppy ? '  (advisory)' : ''}   :quit to leave, :t for a type`);
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '- ' });
 rl.prompt();
