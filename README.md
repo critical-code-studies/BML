@@ -8,7 +8,6 @@ inference, the standard library, all of it short enough that one person can hold
 it in mind and follow what happens to a program between the typing and the
 answer.
 
-This matters because computation is ordinarily met as something already decided.
 The compiler is opaque, the type error arrives from nowhere, and the student
 learns to propitiate the machine rather than to understand it. Iteracy, by which
 I mean the capacity to read and write computational processes rather than merely
@@ -19,11 +18,9 @@ this one tries to be. The standard library is written in BML itself and loaded a
 source, so the `map` you call is the `map` you could have written, and you can
 open the file and confirm that it is.
 
-Standard ML is the inheritance worth taking up here, and worth arguing with
-whilst taking it up. Types are inferred rather than declared, a program that does
-not typecheck does not run, and the tradition running from Milner's LCF is one of
-machine-checked proof, of formality as a working condition rather than as
-decoration. Whether a language of that kind teaches anything a survivor of a
+Types are inferred rather than declared, a program that does not typecheck does
+not run, and the tradition running from Milner's LCF is one of machine-checked
+proof, of formality as a working condition rather than as decoration. Whether a language of that kind teaches anything a survivor of a
 ruined world would need is a question the game this grew inside asks rather than
 answers.
 
