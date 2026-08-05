@@ -231,11 +231,9 @@ test('the suite never writes the cache the installed tool reads', () => {
   assert.equal(after, before, 'the real cache was touched by a test');
 });
 
-test('a cache holding junk is ignored rather than believed', () => {
-  const junk = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bml-vc-')), 'c.json');
-  fs.writeFileSync(junk, JSON.stringify({ at: Date.now(), latest: 'not-a-version' }));
-  const out = execFileSync('node', [BML, '--examples', '--help'], {
-    encoding: 'utf8', env: { ...process.env, BML_VERSION_CACHE: junk, BML_NO_UPDATE_CHECK: '1' },
-  });
-  assert.doesNotMatch(out, /not-a-version/);
-});
+// The guard against a junk cached value (it must be three numbers, or it is
+// ignored) has no honest test through the CLI: a non-interactive run never
+// announces anything whatever the cache says, so a test driving the binary
+// would pass without exercising it. It is asserted where it can be, in the
+// shape of the value, and left uncovered rather than covered by a test that
+// proves nothing.
