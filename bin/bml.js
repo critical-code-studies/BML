@@ -11,7 +11,7 @@
 // the inspiration in his book "Introduction to Standard ML" (1986), and to Åke
 // Wikström for "Functional Programming Using Standard ML" (1987).
 //
-// This file imports src/lang/ and nothing else: no game, no stations, no verbs.
+// This file imports src/ and nothing else: no game, no stations, no verbs.
 // It builds one interpreter through the same `createInterpreter` NostOS uses,
 // and differs from the game only in what it passes — strict rather than
 // advisory, and no host hooks at all. The game is advisory everywhere because a
@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import {
   createInterpreter, smlEcho, joinProgram,
   BML_NAME, BML_VERSION, BML_CREDIT,
-} from '../src/lang/index.js';
+} from '../src/index.js';
 
 const argv = process.argv.slice(2);
 const sloppy = argv.includes('--sloppy');

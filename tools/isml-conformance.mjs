@@ -31,7 +31,7 @@
 // console adapter meant measuring the adapter too — its station verb tables
 // were in scope, and a corpus declaration that happened to name one got the
 // game's wording instead of the language's.
-import { createInterpreter } from '../src/lang/index.js';
+import { createInterpreter } from '../src/index.js';
 import fs from 'fs';
 
 // ---- Splitting source into top-level declarations --------------------------

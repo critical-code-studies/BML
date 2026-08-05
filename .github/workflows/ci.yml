@@ -1,0 +1,31 @@
+# No build step, no dependencies, no package.json: BML is ES modules under
+# plain node, so CI is `node --test` and nothing else.
+#
+# The conformance run is NOT here. It fetches Robert Harper's teaching corpus
+# from cs.cmu.edu, which is his material and is not vendored in this
+# repository; a job that hit a university web server on every push would be
+# rude, and a red build caused by their downtime would say nothing about this
+# code. Run it yourself: node tools/isml-conformance.mjs
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: tests
+        run: node --test test/*.test.js
+      - name: every module parses
+        run: |
+          for f in $(find src bin tools -name '*.js' -o -name '*.mjs'); do
+            node --check "$f" || exit 1
+          done

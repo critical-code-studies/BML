@@ -1,11 +1,11 @@
 // createInterpreter: the language's one entry point, tested without the game.
 //
-// Everything here imports src/lang/index.js and nothing else. That is the
+// Everything here imports src/index.js and nothing else. That is the
 // point: if this file ever needs a game import, the seam M3 cut has leaked.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createInterpreter, smlEcho, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/lang/index.js';
+import { createInterpreter, smlEcho, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
 
 test('an interpreter with no host at all still runs Standard ML', () => {
   const bml = createInterpreter();
