@@ -66,3 +66,14 @@ test('bml --examples refuses to write over what is already there', () => {
   assert.notEqual(status, 0);
   assert.match(out, /already exists/);
 });
+
+test('the README head carries the credit and the version, and they agree', () => {
+  // A version in prose goes stale the moment nobody checks it.
+  const readme = fs.readFileSync(new URL('../README.md', import.meta.url).pathname, 'utf8');
+  const head = readme.split('\n').slice(0, 12).join('\n');
+  assert.match(head, /David M\. Berry, University of Sussex, 2026/);
+  assert.match(head, /Milner, Mads Tofte, and Robert Harper/);
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url).pathname, 'utf8'));
+  assert.match(head, new RegExp(`Version ${pkg.version.replace(/[.]/g, '\\.')}`),
+    `the README head says a different version from package.json (${pkg.version})`);
+});

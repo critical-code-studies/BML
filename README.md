@@ -1,5 +1,13 @@
 # BML
 
+**Version 0.3.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+
+**BML created by David M. Berry, University of Sussex, 2026.**
+Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
+With thanks to Robert Harper for the inspiration in his *Introduction to
+Standard ML* (1986), and to Åke Wikström for *Functional Programming Using
+Standard ML* (1987).
+
 A little Standard ML, in plain JavaScript. No build step and no dependencies.
 
 BML is a small implementation of Standard ML, the lexer, the parser, the type
@@ -160,9 +168,5 @@ and is not included here under any licence; the conformance harness fetches it.
 
 ## Credit
 
-BML created by David M. Berry, 2026.
-
-Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
-Many thanks to Robert Harper for the inspiration in his book *Introduction to
-Standard ML* (1986), and to Åke Wikström for *Functional Programming Using
-Standard ML* (1987).
+At the head of this file. BML runs inside
+[NostOS](https://github.com/dmberry/nostos) under the in-fiction name AI-ML.
