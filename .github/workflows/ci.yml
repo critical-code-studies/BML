@@ -29,3 +29,13 @@ jobs:
           for f in $(find src bin tools -name '*.js' -o -name '*.mjs'); do
             node --check "$f" || exit 1
           done
+
+      # The README tells you `npm install` puts `bml` on the path. It said so
+      # once before it was true, so CI checks it now rather than trusting it.
+      - name: the package installs and the bin runs
+        run: |
+          npm pack
+          mkdir -p /tmp/installtest && cd /tmp/installtest
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/bml-lang-*.tgz
+          printf '3 + 4\n:quit\n' | ./node_modules/.bin/bml | grep 'val it = 7 : int'

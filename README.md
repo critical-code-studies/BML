@@ -1,7 +1,6 @@
 # BML
 
-A little Standard ML, in plain JavaScript. No build step, no dependencies, no
-`package.json`.
+A little Standard ML, in plain JavaScript. No build step and no dependencies.
 
 BML is a small implementation of Standard ML, the lexer, the parser, the type
 inference, the standard library, all of it short enough that one person can hold
@@ -64,6 +63,18 @@ redistributed here.
 
 ## Using it
 
+Straight from a clone:
+
+```
+node bin/bml.js
+```
+
+Or install it, which puts `bml` on the path:
+
+```
+npm install github:critical-code-studies/BML
+```
+
 ```
 bml                 strict repl (a line that does not typecheck is refused)
 bml --sloppy        advisory repl (the clash is named; the line runs)
@@ -77,7 +88,7 @@ evaluating, `:quit` leaves.
 As a library:
 
 ```js
-import { createInterpreter } from './src/index.js';
+import { createInterpreter } from 'bml-lang';
 
 const bml = createInterpreter({ typecheck: 'strict' });
 bml.loadPrelude();

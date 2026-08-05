@@ -1,0 +1,27 @@
+{
+  "name": "bml-lang",
+  "version": "2.7.0",
+  "description": "A little Standard ML, in plain JavaScript",
+  "type": "module",
+  "license": "MIT",
+  "author": "David M. Berry",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/critical-code-studies/BML.git"
+  },
+  "homepage": "https://github.com/critical-code-studies/BML#readme",
+  "bugs": "https://github.com/critical-code-studies/BML/issues",
+  "keywords": ["standard-ml", "sml", "interpreter", "type-inference", "teaching"],
+  "engines": { "node": ">=18" },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "bin": { "bml": "./bin/bml.js" },
+  "files": ["src", "bin", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "conformance": "node tools/isml-conformance.mjs"
+  }
+}
