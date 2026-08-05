@@ -19,6 +19,7 @@
 
 import readline from 'node:readline';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   createInterpreter, smlEcho, joinProgram,
   BML_NAME, BML_VERSION, BML_CREDIT,
@@ -34,6 +35,37 @@ const sloppy = argv.includes('--sloppy');
 const forceRepl = argv.includes('-i');
 const files = argv.filter((a) => !a.startsWith('-'));
 
+// `bml --examples [dir]` copies the example programs somewhere you can edit
+// them. Installed, they live inside node_modules where nobody will find them
+// and nobody should be editing them in place.
+//
+// A copy on request rather than a postinstall hook: npm's postinstall is
+// disabled in plenty of setups, it runs without being asked, and writing to
+// somebody's working directory because they installed a package is not on.
+if (argv.includes('--examples')) {
+  const from = new URL('../examples/', import.meta.url).pathname;
+  const rest = argv.filter((a) => !a.startsWith('-'));
+  const to = path.resolve(rest[0] || 'bml-examples');
+  if (!fs.existsSync(from)) {
+    console.log('This copy has no examples/ directory next to it.');
+    process.exit(1);
+  }
+  if (fs.existsSync(to)) {
+    console.log(`${to} already exists. Move it, or name somewhere else:`);
+    console.log('  bml --examples somewhere-else');
+    process.exit(1);
+  }
+  fs.mkdirSync(to, { recursive: true });
+  const names = fs.readdirSync(from).sort();
+  for (const n of names) fs.copyFileSync(path.join(from, n), path.join(to, n));
+  console.log(`Copied ${names.length} files to ${to}`);
+  console.log('');
+  for (const n of names.filter((x) => x.endsWith('.ml'))) console.log(`  bml ${path.join(path.basename(to), n)}`);
+  console.log('');
+  console.log('Start with the first. They are meant to be edited and rerun.');
+  process.exit(0);
+}
+
 if (argv.includes('--help') || argv.includes('-h')) {
   console.log([
     `${BML_NAME} ${BML_VERSION}, a little Standard ML`,
@@ -43,6 +75,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
     '  bml --sloppy        advisory repl (a clash is named; the line runs)',
     '  bml file.ml …       run files and exit',
     '  bml -i file.ml      run files, then stay at the prompt',
+    '  bml --examples      copy the example programs here, to edit and run',
     '',
     'At the prompt:',
     '  use "file.ml";      read a file in',

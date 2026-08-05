@@ -25,7 +25,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.2.0, a little Standard ML
+BML 0.3.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -76,6 +76,18 @@ under the default checker:
 bml examples/09-eight-queens.ml
 ```
 
+If you installed rather than cloned, they are inside `node_modules` where nobody
+will find them. Copy them somewhere you can edit:
+
+```
+bml --examples
+```
+
+That writes a `bml-examples/` directory beside you and refuses to write over one
+that is already there. It is a command rather than something the install does on
+its own: a package should not put files in your working directory because you
+installed it.
+
 ## Using it
 
 Straight from a clone:
@@ -95,6 +107,7 @@ bml                 strict repl (a line that does not typecheck is refused)
 bml --sloppy        advisory repl (the clash is named; the line runs)
 bml file.ml …       run files and exit
 bml -i file.ml      run files, then stay at the prompt
+bml --examples      copy the examples here, to edit and run
 ```
 
 At the prompt: `help` lists the forms, `:t <expr>` gives a type without

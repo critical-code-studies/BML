@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 
 const BML = new URL('../bin/bml.js', import.meta.url).pathname;
 const DIR = new URL('../examples/', import.meta.url).pathname;
@@ -41,4 +42,27 @@ test('the examples README lists every file that is there', () => {
   for (const f of files) {
     assert.match(readme, new RegExp(f.replace(/[.]/g, '\\.')), `README does not mention ${f}`);
   }
+});
+
+test('bml --examples copies them somewhere editable', () => {
+  // Installed, the examples sit inside node_modules where nobody will find them
+  // and nobody should edit them in place.
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/bml-ex-`);
+  const out = execFileSync('node', [BML, '--examples', `${dir}/copied`], { encoding: 'utf8' });
+  assert.match(out, /Copied \d+ files/);
+  const copied = fs.readdirSync(`${dir}/copied`).filter((f) => f.endsWith('.ml'));
+  assert.equal(copied.length, files.length, 'every example travels');
+  // And a copied one still runs.
+  const ran = execFileSync('node', [BML, `${dir}/copied/${copied[0]}`], { encoding: 'utf8' });
+  assert.doesNotMatch(ran, /^ERR:/m);
+});
+
+test('bml --examples refuses to write over what is already there', () => {
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/bml-ex-`);
+  execFileSync('node', [BML, '--examples', `${dir}/twice`], { encoding: 'utf8' });
+  let status = 0, out = '';
+  try { execFileSync('node', [BML, '--examples', `${dir}/twice`], { encoding: 'utf8', stdio: ['pipe','pipe','pipe'] }); }
+  catch (e) { status = e.status; out = String(e.stdout || ''); }
+  assert.notEqual(status, 0);
+  assert.match(out, /already exists/);
 });
