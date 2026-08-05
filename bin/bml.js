@@ -20,6 +20,7 @@
 import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import {
   createInterpreter, smlEcho, joinProgram,
   BML_NAME, BML_VERSION, BML_CREDIT,
@@ -34,6 +35,62 @@ const argv = process.argv.slice(2);
 const sloppy = argv.includes('--sloppy');
 const forceRepl = argv.includes('-i');
 const files = argv.filter((a) => !a.startsWith('-'));
+
+// ---- Is there a newer one? --------------------------------------------------
+//
+// WHAT THIS DOES AND DOES NOT DO, because a tool that quietly contacts a server
+// is the opposite of the thing this repository argues for.
+//
+// It fetches one file, package.json, from the public repository, and compares
+// its version to this one. It sends no identity, no telemetry and no arguments;
+// what a web server can infer is that some IP asked for a public file, which is
+// true of reading the README.
+//
+// It runs ONLY in an interactive session: not for `bml file.ml`, not in a
+// pipe, not in CI, not under a test. It caches for a day, times out after a
+// second and a half, and fails silently, so it can never delay or break a
+// session. `BML_NO_UPDATE_CHECK=1` turns it off entirely.
+const VERSION_URL = 'https://raw.githubusercontent.com/critical-code-studies/BML/main/package.json';
+const CACHE = path.join(os.tmpdir(), 'bml-version-check.json');
+const DAY = 24 * 60 * 60 * 1000;
+
+function cached() {
+  try {
+    const c = JSON.parse(fs.readFileSync(CACHE, 'utf8'));
+    if (c && typeof c.at === 'number' && Date.now() - c.at < DAY) return c.latest;
+  } catch { /* no cache, or unreadable: check again */ }
+  return null;
+}
+
+// "0.10.0" is newer than "0.9.0", which a string comparison gets wrong.
+function isNewer(latest, mine) {
+  const a = String(latest).split('.').map(Number);
+  const b = String(mine).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
+}
+
+async function checkForUpdate() {
+  if (process.env.BML_NO_UPDATE_CHECK) return null;
+  if (!process.stdin.isTTY) return null;          // scripts, pipes, CI, tests
+  const hit = cached();
+  if (hit !== null) return isNewer(hit, BML_VERSION) ? hit : null;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 1500);
+    const res = await fetch(VERSION_URL, { signal: ctl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const latest = String((await res.json()).version || '');
+    try { fs.writeFileSync(CACHE, JSON.stringify({ at: Date.now(), latest })); } catch { /* cache is a nicety */ }
+    return isNewer(latest, BML_VERSION) ? latest : null;
+  } catch {
+    return null;    // offline, blocked, slow, moved: none of it is your problem
+  }
+}
 
 // `bml --examples [dir]` copies the example programs somewhere you can edit
 // them. Installed, they live inside node_modules where nobody will find them
@@ -66,6 +123,26 @@ if (argv.includes('--examples')) {
   process.exit(0);
 }
 
+if (argv.includes('--version') || argv.includes('-v')) {
+  console.log(`${BML_NAME} ${BML_VERSION}`);
+  // Explicit, so it checks even when the automatic one would not, and says so
+  // either way rather than leaving you wondering whether it looked.
+  if (process.env.BML_NO_UPDATE_CHECK) {
+    console.log('(update check off: BML_NO_UPDATE_CHECK is set)');
+  } else {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 2500);
+      const res = await fetch(VERSION_URL, { signal: ctl.signal });
+      clearTimeout(timer);
+      const latest = String((await res.json()).version || '');
+      if (isNewer(latest, BML_VERSION)) console.log(`${latest} is available: npm install github:critical-code-studies/BML`);
+      else console.log('up to date');
+    } catch { console.log('(could not reach github to check for a newer one)'); }
+  }
+  process.exit(0);
+}
+
 if (argv.includes('--help') || argv.includes('-h')) {
   console.log([
     `${BML_NAME} ${BML_VERSION}, a little Standard ML`,
@@ -76,6 +153,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
     '  bml file.ml …       run files and exit',
     '  bml -i file.ml      run files, then stay at the prompt',
     '  bml --examples      copy the example programs here, to edit and run',
+    '  bml --version       which build this is, and whether a newer one exists',
     '',
     'At the prompt:',
     '  use "file.ml";      read a file in',
@@ -204,6 +282,14 @@ for (const f of files) { if (!runFile(f)) failed = true; }
 if (files.length && !forceRepl) process.exit(failed ? 1 : 0);
 
 console.log(banner());
+
+// Interactive only, cached, silent on failure. See checkForUpdate above.
+const newer = await checkForUpdate();
+if (newer) {
+  console.log(`  A newer BML is out: ${newer} (you have ${BML_VERSION}).`);
+  console.log('  npm install github:critical-code-studies/BML');
+  console.log('');
+}
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '- ' });
 rl.prompt();

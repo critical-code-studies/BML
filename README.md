@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.3.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.4.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.3.0, a little Standard ML
+BML 0.4.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -116,6 +116,7 @@ bml --sloppy        advisory repl (the clash is named; the line runs)
 bml file.ml …       run files and exit
 bml -i file.ml      run files, then stay at the prompt
 bml --examples      copy the examples here, to edit and run
+bml --version       which build this is, and whether a newer one exists
 ```
 
 At the prompt: `help` lists the forms, `:t <expr>` gives a type without
@@ -160,6 +161,26 @@ nothing outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`, `Option`,
 and `Foo` name the same value. Recursion depth is the host's rather than the
 interpreter's, so a deep non-tail recursion can exhaust the JavaScript stack
 before the step budget notices.
+
+## The update check
+
+An interactive session asks GitHub, once a day, whether a newer BML exists, and
+says so if there is one. It fetches one public file, `package.json`, and sends
+nothing: no identity, no telemetry, no record of what you typed. What a web
+server can infer is that some address asked for a public file, which is equally
+true of reading this page.
+
+It runs in an interactive session only. Not when you run a file, not in a pipe,
+not in CI, not inside a test. It times out after a second and a half and fails
+silently, so it cannot delay or break anything.
+
+Turn it off and it never runs:
+
+```
+export BML_NO_UPDATE_CHECK=1
+```
+
+`bml --version` checks on request and tells you either way.
 
 ## Licence
 

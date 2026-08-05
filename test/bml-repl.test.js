@@ -172,3 +172,41 @@ test('a closed pipe is not an error', () => {
   assert.doesNotMatch(out, /EPIPE|Unhandled|at Socket/);
   assert.match(out, /BML/);
 });
+
+// ---- the update check (v0.4.0) ----------------------------------------------
+//
+// The property worth protecting is not that it works, it is that it STAYS OUT
+// OF THE WAY. A teaching interpreter that contacts a server when a script runs
+// it, or in CI, or inside somebody's test suite, is doing something its README
+// does not say it does.
+
+const CACHE = path.join(os.tmpdir(), 'bml-version-check.json');
+const fakeCache = (latest) =>
+  fs.writeFileSync(CACHE, JSON.stringify({ at: Date.now(), latest }));
+
+test('a piped session never announces an update, even with one cached', () => {
+  fakeCache('99.0.0');
+  const { out } = bml([':quit']);
+  assert.doesNotMatch(out, /newer BML/, 'stdin is not a tty: no check, no noise');
+});
+
+test('running a file never announces an update', () => {
+  fakeCache('99.0.0');
+  const f = tmp('q.ml', 'val x = 1\n');
+  const { out } = bml('', [f]);
+  assert.doesNotMatch(out, /newer BML/);
+});
+
+test('--version says which build this is', () => {
+  const { out, status } = bml('', ['--version']);
+  assert.equal(status, 0);
+  assert.match(out, /BML \d+\.\d+\.\d+/);
+});
+
+test('BML_NO_UPDATE_CHECK turns it off and says so', () => {
+  const out = execFileSync('node', [BML, '--version'], {
+    encoding: 'utf8', env: { ...process.env, BML_NO_UPDATE_CHECK: '1' },
+  });
+  assert.match(out, /update check off/);
+  assert.doesNotMatch(out, /up to date|is available/, 'it did not reach the network');
+});
