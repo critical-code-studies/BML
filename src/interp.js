@@ -61,6 +61,77 @@ export function smlEcho(text, ty) {
  *       A line whose whole result is a partly-applied verb. The host usually
  *       knows how the verb is meant to be called.
  */
+// Which names a declaration binds at the top level. Only these two node types
+// write into the environment; see the two `env[...] =` sites in eval.js.
+function topLevelNames(ast) {
+  if (!ast) return [];
+  // The node names are read from eval.js, not guessed: the first version of
+  // this said 'LetPat', which does not exist, so `val (a, b) = …` bound over
+  // the top of a captured frame exactly as before.
+  if (ast.type === 'TopLet') return [String(ast.name).toLowerCase()];
+  if (ast.type === 'TopLetPat') return patternNames(ast.pat).map((n) => n.toLowerCase());
+  return [];
+}
+
+// Every name a pattern binds. Walked GENERICALLY rather than by listing the
+// node shapes, because the first version of this listed shapes that did not
+// exist ('PVar', 'PAs') and so found nothing in `val (a, b) = …`, which left
+// tuple bindings still overwriting what a closure had captured. The pattern
+// types are lowercase and there are a dozen of them; recursing over every
+// object-valued field cannot fall behind a new one.
+//
+// This over-approximates: a constructor in a pattern (`val SOME x = …`) also
+// looks like a name here. The cost of a false positive is one extra frame on
+// the chain, which is correct behaviour and a little memory; the cost of a
+// false negative is the bug this exists to fix.
+function patternNames(pat, out = []) {
+  if (!pat || typeof pat !== 'object') return out;
+  if (typeof pat.name === 'string') out.push(pat.name);
+  for (const k of Object.keys(pat)) {
+    if (k === 'name' || k === 'type') continue;
+    const v = pat[k];
+    if (Array.isArray(v)) v.forEach((x) => patternNames(x, out));
+    else if (v && typeof v === 'object') patternNames(v, out);
+  }
+  return out;
+}
+
+// Flatten a session to a plain object a host can serialise.
+//
+// TWO THINGS ARE WRONG WITH SAVING THE RAW OBJECT, and this fixes both.
+//
+// The chain. Top-level rebindings live on prototype-linked frames (see
+// `envTip` below), and JSON.stringify takes own properties only, so saving the
+// raw session drops every binding made after a name was reused. This walks the
+// chain with for..in and takes the visible value of each name.
+//
+// The closures. A closure holds the environment it captured, which holds the
+// closure, so a session with a function in it CANNOT be stringified at all. In
+// NostOS that was a live bug and a quiet one: `player.laptop` goes into the
+// save blob, so defining a function at the NostBook made JSON.stringify throw,
+// the throw was swallowed by the `catch { }` around localStorage, and the game
+// stopped saving without saying so. A closure could never have been restored
+// from JSON in any case, so the honest thing is to leave it out.
+//
+// The test is empirical rather than a list of tags: anything that survives a
+// round trip is kept, anything that does not is dropped. A list would go stale
+// the first time a value type gained a function field.
+export function flattenSession(session) {
+  const out = {};
+  if (!session) return out;
+  const tip = session.__env || session;
+  for (const k in tip) {
+    if (k === '__env') continue;
+    try {
+      JSON.stringify(tip[k]);
+      out[k] = tip[k];
+    } catch {
+      // A function, or something holding one. It cannot come back from a save.
+    }
+  }
+  return out;
+}
+
 export function createInterpreter(opts = {}) {
   const typecheck = opts.typecheck || 'strict';
   // The language's own primitives first, the host's verbs over the top. A host
@@ -88,6 +159,28 @@ export function createInterpreter(opts = {}) {
   const hooks = opts.hooks || {};
   const session = opts.session || {};
 
+  // THE ENVIRONMENT TIP, and why there is one.
+  //
+  // A top-level binding used to be written straight into the session object, so
+  // rebinding a name overwrote the slot an existing closure was still reading:
+  //
+  //   val n = 10
+  //   fun addn m = m + n
+  //   val n = 99
+  //   addn 1            (* 100 here; Standard ML says 11 *)
+  //
+  // `Lam` captures its environment correctly and `Let` already opens a scope
+  // with Object.create, so the fault was only ever the top level. A rebinding
+  // now opens a new frame on the chain instead of writing over the old one:
+  // closures made earlier keep reading the frame they captured, and later
+  // lookups walk the chain and find the newer value first.
+  //
+  // The tip lives ON the session rather than in a local, because NostOS builds
+  // a fresh interpreter per line around the same session object, and a local
+  // would be thrown away between lines. The session stays the ROOT of the
+  // chain, so anything the host writes to it directly is still visible.
+  const envTip = () => session.__env || session;
+
   // What the checker makes of a line, as a string to print beside the answer.
   // Never throws and never refuses: inference here REPORTS, and a name it has
   // never seen is "anything" rather than an error. Whether the line then runs is
@@ -101,9 +194,9 @@ export function createInterpreter(opts = {}) {
       // two arguments, which is ill-typed, while the evaluator saw the operator
       // the user had just declared. Same text, two grammars.
       const ast = parse(tokenize(String(source)), session.__fixity || undefined);
-      const r = typeOf(ast, session);
+      const r = typeOf(ast, envTip());
       if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
-      remember(ast, session, r.t);
+      remember(ast, envTip(), r.t);
       // A warning rides alongside the type rather than replacing it: the line is
       // well typed and also has a hole in it, and you want to be told both.
       if (r.warnings && r.warnings.length) return `${r.type}    WARNING: ${r.warnings.join('; ')}`;
@@ -142,7 +235,7 @@ export function createInterpreter(opts = {}) {
       // arguments still evaluate to atoms exactly as before.
       if (ast && ast.type === 'Var' && /^[a-z][a-z0-9]*$/i.test(ast.name)) {
         const lower = ast.name.toLowerCase();
-        const bound = Object.prototype.hasOwnProperty.call(session, lower);
+        const bound = lower in envTip();
         const cons = session.__cons || {};
         const isCon = Object.prototype.hasOwnProperty.call(cons, ast.name);
         if (!bound && !isCon && !builtins[lower]
@@ -159,10 +252,17 @@ export function createInterpreter(opts = {}) {
       // Fresh output buffer for this line: `echo` pushes into it mid-evaluation,
       // so a `;`-sequence or a recursive echo prints every step rather than only
       // the final value.
+      // A top-level binding of a name already in scope opens a new frame, so
+      // the old one survives for whoever captured it. Only `TopLet` and
+      // `LetPat` write into the environment; everything else (datatypes,
+      // fixity, structures) keeps its own registry on the session root.
+      const rebound = topLevelNames(ast).filter((n) => n in envTip());
+      if (rebound.length) session.__env = Object.create(envTip());
+
       const out = [];
       setOut(out);
       beginRun(hostCtx && hostCtx.fuel);
-      const result = evalNode(ast, session, ctx, builtins);
+      const result = evalNode(ast, envTip(), ctx, builtins);
       if (result && result.tag === 'fn') {
         const hint = hooks.needsMoreArgs && hooks.needsMoreArgs(result, hostCtx);
         return { ok: false, text: `ERR: ${hint || `${result.name} needs more arguments`}` };
@@ -208,5 +308,5 @@ export function createInterpreter(opts = {}) {
     }
   }
 
-  return { run, typeReport, loadPrelude, smlEcho, session, typecheck };
+  return { run, typeReport, loadPrelude, smlEcho, session, typecheck, env: envTip };
 }

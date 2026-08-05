@@ -1,11 +1,11 @@
 // createInterpreter: the language's one entry point, tested without the game.
 //
-// Everything here imports src/index.js and nothing else. That is the
+// Everything here imports src/lang/index.js and nothing else. That is the
 // point: if this file ever needs a game import, the seam M3 cut has leaked.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createInterpreter, smlEcho, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
+import { createInterpreter, smlEcho, flattenSession, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
 
 test('an interpreter with no host at all still runs Standard ML', () => {
   const bml = createInterpreter();
@@ -118,4 +118,67 @@ test('the language names and credits itself', () => {
   assert.match(BML_VERSION, /^\d+\.\d+$/);
   assert.match(BML_CREDIT.join(' '), /David M\. Berry/);
   assert.match(BML_CREDIT.join(' '), /Milner.*Tofte.*Harper/);
+});
+
+// ---- lexical scope at the top level (v1.291) ---------------------------------
+
+test('a top-level rebinding does not overwrite what a closure captured', () => {
+  // The defect this closes. `Lam` always captured its environment correctly and
+  // `Let` always opened a scope; the top level wrote straight into the session,
+  // so rebinding a name changed the value an existing closure was reading.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('val n = 10');
+  bml.run('fun addn m = m + n');
+  bml.run('val n = 99');
+  assert.equal(bml.run('addn 1').text, '11', 'Standard ML says 11, not 100');
+  assert.equal(bml.run('n').text, '99', 'and the new binding is what n means now');
+});
+
+test('the same holds for a pattern binding', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('val (a, b) = (1, 2)');
+  bml.run('fun getA () = a');
+  bml.run('val (a, b) = (9, 9)');
+  assert.equal(bml.run('getA ()').text, '1');
+  assert.equal(bml.run('a').text, '9');
+});
+
+test('shadowing does not break recursion, which needs the live environment', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('fun fact 0 = 1 | fact k = k * fact (k - 1)');
+  assert.equal(bml.run('fact 5').text, '120');
+  // Redefining it must take effect, and the old one must not be consulted.
+  bml.run('fun fact k = 0');
+  assert.equal(bml.run('fact 5').text, '0');
+});
+
+test('a long chain of rebindings still resolves to the newest', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  for (let i = 0; i < 60; i++) bml.run(`val counter = ${i}`);
+  assert.equal(bml.run('counter').text, '59');
+});
+
+test('flattenSession keeps every visible binding across the chain', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('val a = 1');
+  bml.run('val b = 2');
+  bml.run('val a = 3');          // pushes a frame; `a` is no longer an own property
+  const flat = flattenSession(bml.session);
+  assert.equal(flat.a.v, 3, 'the newest value of a rebound name');
+  assert.equal(flat.b.v, 2, 'and a name bound on an older frame');
+});
+
+test('flattenSession drops what cannot survive a save, and does not throw', () => {
+  // A closure holds the env that holds the closure. Serialising a session with a
+  // function in it threw, and in NostOS the throw was swallowed by the catch
+  // around localStorage, so the game stopped saving without saying so.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('val kept = 42');
+  bml.run('val f = fn x => x + 1');
+  const flat = flattenSession(bml.session);
+  assert.doesNotThrow(() => JSON.stringify(flat));
+  // Names are stored lower-cased, which is its own departure from Standard ML
+  // and not this test's business.
+  assert.equal(flat.kept.v, 42, 'ordinary values survive');
+  assert.equal('f' in flat, false, 'the closure is left out rather than breaking the save');
 });

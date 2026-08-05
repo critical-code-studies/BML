@@ -9,7 +9,7 @@
 // version banner and its own wording for `ml -ver`. The names below are the
 // language's own.
 
-export { createInterpreter, smlEcho } from './interp.js';
+export { createInterpreter, smlEcho, flattenSession } from './interp.js';
 export { RonmlError, RonmlFuelError, RonmlRaise } from './errors.js';
 export { tokenize } from './lex.js';
 export { parse, parseLine, joinProgram, joinProgramLines, defaultFixity } from './parse.js';
@@ -23,7 +23,7 @@ export const BML_NAME = 'BML';
 // The number continues AI-ML's rather than restarting, because it is the same
 // language: the history in the NostOS repository is this language's history,
 // and a fresh 0.1.0 would throw that away to look new.
-export const BML_VERSION = '2.6';
+export const BML_VERSION = '2.7';
 
 export const BML_CREDIT = [
   'BML created by David M. Berry, 2026.',

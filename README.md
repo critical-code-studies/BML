@@ -26,7 +26,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 2.6   :quit to leave, :t for a type
+BML 2.7   :quit to leave, :t for a type
 - fun fact 0 = 1
 =   | fact n = n * fact (n - 1)
 val fact = <fn> : int -> int
@@ -109,18 +109,10 @@ functor signatures are years of work no teaching implementation attempts.
 
 Known gaps, kept honest by a test that walks them: no `abstype`, no `open`, and
 nothing outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`, `Option`,
-`ListPair`. One defect worth naming, because it is a real difference in
-semantics rather than a missing feature: a top-level rebinding overwrites what
-an existing closure captured, so
-
-```
-val n = 10
-fun addn m = m + n
-val n = 99
-addn 1
-```
-
-gives 100 where Standard ML gives 11.
+`ListPair`. Identifiers are lower-cased, which Standard ML does not do, so `foo`
+and `Foo` name the same value. Recursion depth is the host's rather than the
+interpreter's, so a deep non-tail recursion can exhaust the JavaScript stack
+before the step budget notices.
 
 ## Licence
 
