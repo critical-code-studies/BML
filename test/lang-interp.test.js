@@ -115,7 +115,7 @@ test('smlEcho puts SML\'s own shape round an answer', () => {
 
 test('the language names and credits itself', () => {
   assert.equal(BML_NAME, 'BML');
-  assert.match(BML_VERSION, /^\d+\.\d+$/);
+  assert.match(BML_VERSION, /^\d+\.\d+\.\d+$/, 'semver, and the package.json must agree');
   assert.match(BML_CREDIT.join(' '), /David M\. Berry/);
   assert.match(BML_CREDIT.join(' '), /Milner.*Tofte.*Harper/);
 });

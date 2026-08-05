@@ -25,7 +25,13 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 2.7   :quit to leave, :t for a type
+BML 0.1.0, a little Standard ML
+Created by David M. Berry, University of Sussex, 2026.
+Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
+
+strict: a line that does not typecheck will not run.
+Type help for the forms, :quit to leave.
+
 - fun fact 0 = 1
 =   | fact n = n * fact (n - 1)
 val fact = <fn> : int -> int
@@ -82,8 +88,8 @@ bml file.ml …       run files and exit
 bml -i file.ml      run files, then stay at the prompt
 ```
 
-At the prompt: `use "file.ml";` reads a file in, `:t <expr>` gives a type without
-evaluating, `:quit` leaves.
+At the prompt: `help` lists the forms, `:t <expr>` gives a type without
+evaluating, `use "file.ml";` reads a file in, `:quit` leaves.
 
 As a library:
 

@@ -129,3 +129,46 @@ test('the prelude is loaded before the first line', () => {
   const { out } = bml(['List.map (fn x => x + 1) [1,2,3]', ':quit']);
   assert.match(out, /\[2, 3, 4\]/);
 });
+
+// ---- the banner, help, and a closed pipe (v0.1.0) ----------------------------
+
+test('the banner says who made it, where, and which build', () => {
+  // A screenshot of a session should carry its own provenance.
+  const { out } = bml([':quit']);
+  assert.match(out, /BML \d+\.\d+\.\d+, a little Standard ML/);
+  assert.match(out, /David M\. Berry, University of Sussex, 2026/);
+  assert.match(out, /Milner, Mads Tofte and Robert Harper/);
+  assert.match(out, /strict: a line that does not typecheck will not run/);
+});
+
+test('--sloppy says so in the banner rather than leaving you to guess', () => {
+  const { out } = bml([':quit'], ['--sloppy']);
+  assert.match(out, /advisory: a clash is named and the line runs anyway/);
+});
+
+test('help works, and it is not a language expression', () => {
+  // In the game the console intercepts `help` before evaluation, and that
+  // interception lives in the game's adapter. Out here `help` was an unbound
+  // variable until v0.1.0.
+  for (const word of ['help', ':help', '?']) {
+    const { out } = bml([word, ':quit']);
+    assert.doesNotMatch(out, /unbound variable/, `${word} should be understood`);
+    assert.match(out, /DECLARATIONS/);
+    assert.match(out, /AT THE PROMPT/);
+  }
+});
+
+test('help lists forms the language actually has', () => {
+  const { out } = bml(['help', ':quit']);
+  for (const form of ['datatype', 'signature', 'functor', 'handle', 'infix', 'ListPair']) {
+    assert.match(out, new RegExp(form), `help should mention ${form}`);
+  }
+});
+
+test('a closed pipe is not an error', () => {
+  // `bml | head -1` shuts stdout while readline is still writing a prompt, and
+  // node turned that into an unhandled EPIPE and a stack trace.
+  const out = execFileSync('sh', ['-c', `printf ':quit\\n' | node ${BML} 2>&1 | head -1`], { encoding: 'utf8' });
+  assert.doesNotMatch(out, /EPIPE|Unhandled|at Socket/);
+  assert.match(out, /BML/);
+});

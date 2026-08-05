@@ -24,6 +24,11 @@ import {
   BML_NAME, BML_VERSION, BML_CREDIT,
 } from '../src/index.js';
 
+// A closed pipe is not an error. `bml | head -1` shuts stdout while readline is
+// still writing a prompt into it, and node turns that into an unhandled EPIPE
+// and a stack trace. Every unix tool that writes to a pipe has to do this.
+process.stdout.on('error', (e) => { if (e && e.code === 'EPIPE') process.exit(0); });
+
 const argv = process.argv.slice(2);
 const sloppy = argv.includes('--sloppy');
 const forceRepl = argv.includes('-i');
@@ -31,7 +36,8 @@ const files = argv.filter((a) => !a.startsWith('-'));
 
 if (argv.includes('--help') || argv.includes('-h')) {
   console.log([
-    `${BML_NAME} ${BML_VERSION} — a little Standard ML`,
+    `${BML_NAME} ${BML_VERSION}, a little Standard ML`,
+    'Created by David M. Berry, University of Sussex, 2026.',
     '',
     '  bml                 strict repl (ill-typed lines are refused)',
     '  bml --sloppy        advisory repl (a clash is named; the line runs)',
@@ -55,6 +61,71 @@ if (argv.includes('--help') || argv.includes('-h')) {
 const bml = createInterpreter({ typecheck: sloppy ? 'report' : 'strict' });
 bml.loadPrelude();
 
+
+// What the REPL says when it opens. Who made it, where, and which build, so a
+// screenshot of a session carries its own provenance.
+function banner() {
+  return [
+    `${BML_NAME} ${BML_VERSION}, a little Standard ML${sloppy ? '  (advisory)' : ''}`,
+    'Created by David M. Berry, University of Sussex, 2026.',
+    'Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.',
+    '',
+    sloppy
+      ? 'advisory: a clash is named and the line runs anyway.'
+      : 'strict: a line that does not typecheck will not run.',
+    'Type help for the forms, :quit to leave.',
+    '',
+  ].join('\n');
+}
+
+// `help` at the prompt. It is not a language expression and never was: in the
+// game the console intercepts it before evaluation, and that interception lives
+// in the game's adapter, so out here `help` was an unbound variable. A REPL that
+// cannot tell you what it takes is not much of a teaching interpreter.
+const HELP = `${BML_NAME} ${BML_VERSION}, a little Standard ML
+Created by David M. Berry, University of Sussex, 2026.
+
+DECLARATIONS
+  val x = 5                       bind a value
+  val (a, b) = (1, 2)             bind through a pattern
+  fun f x = x + 1                 a function
+  fun fact 0 = 1                  clauses, tried in order
+    | fact n = n * fact (n - 1)
+  datatype t = A | B of int       a type of your own
+  type point = int * int          an abbreviation
+  exception Bad                   an exception
+  infix 6 plus                    give a name a fixity
+  structure S = struct ... end    a module
+  signature S = sig ... end       what a module shows
+  functor F (X : S) = struct ...  a module taking a module
+
+EXPRESSIONS
+  fn x => x + 1                   a function with no name
+  if p then a else b
+  case e of A => 1 | B n => n     take a value apart
+  let val x = 1 in x + 1 end      a binding with a scope
+  e handle Bad => 0               catch what was raised
+  raise Bad
+  a andalso b   a orelse b        short-circuit
+
+VALUES
+  1   1.5   #"a"   "hi"   true   ()
+  (1, "a")        a tuple
+  {x = 1, y = 2}  a record, taken apart with #x
+  [1, 2, 3]       a list, built from nil and ::
+  ref 0  !r  r := 1               the one mutable thing
+
+THE LIBRARY, written in BML and loaded as source
+  List String Char Int Real Bool Option ListPair
+  hd tl length explode implode ord chr size abs o before ignore
+  Open src/basis.js and read it: the map you call is the map you could write.
+
+AT THE PROMPT
+  :t <expr>       show a type without evaluating it
+  use "f.ml";     read a file in
+  help            this
+  :quit           leave (or ^D)`;
+
 // Run one line and print what Standard ML would print. Returns false if the
 // line was refused, so a file can stop at its first error rather than pressing
 // on with half a program loaded.
@@ -62,6 +133,7 @@ function step(src) {
   const line = String(src).trim();
   if (!line) return true;
   if (line === ':quit' || line === ':q') return null;
+  if (line === 'help' || line === ':help' || line === '?') { console.log(HELP); return true; }
   if (line.startsWith(':t ')) {
     const t = bml.typeReport(line.slice(3));
     console.log(t || 'no type: the checker could not read that');
@@ -95,7 +167,7 @@ let failed = false;
 for (const f of files) { if (!runFile(f)) failed = true; }
 if (files.length && !forceRepl) process.exit(failed ? 1 : 0);
 
-console.log(`${BML_NAME} ${BML_VERSION}${sloppy ? '  (advisory)' : ''}   :quit to leave, :t for a type`);
+console.log(banner());
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '- ' });
 rl.prompt();

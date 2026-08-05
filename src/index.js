@@ -20,10 +20,14 @@ export { PRELUDE } from './basis.js';
 
 export const BML_NAME = 'BML';
 
-// The number continues AI-ML's rather than restarting, because it is the same
-// language: the history in the NostOS repository is this language's history,
-// and a fresh 0.1.0 would throw that away to look new.
-export const BML_VERSION = '2.7';
+// 0.1.0, and starting there is the point. The language carries a longer
+// history than that and `git log` has it, but a version number on a package
+// means one specific thing: how stable the API is. `createInterpreter` is days
+// old and its contract has already changed three times (the return dropped
+// `value`, then gained `printing`, then `primitives`), so 2.7 would have
+// claimed two major versions of a settled interface that has never existed.
+// The language's own lineage belongs in the history and the README, not here.
+export const BML_VERSION = '0.1.0';
 
 export const BML_CREDIT = [
   'BML created by David M. Berry, 2026.',
