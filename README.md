@@ -3,10 +3,10 @@
 A little Standard ML, in plain JavaScript. No build step, no dependencies, no
 `package.json`.
 
-BML is a small implementation of Standard ML written so that the whole of it can
-be read, the lexer, the parser, the type inference, the standard library, all of
-it short enough that one person can hold it in mind and follow what happens to a
-program between the typing and the answer.
+BML is a small implementation of Standard ML, the lexer, the parser, the type
+inference, the standard library, all of it short enough that one person can hold
+it in mind and follow what happens to a program between the typing and the
+answer.
 
 This matters because computation is ordinarily met as something already decided.
 The compiler is opaque, the type error arrives from nowhere, and the student
