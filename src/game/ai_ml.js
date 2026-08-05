@@ -941,7 +941,7 @@ export function decide(program, sense, opts = {}) {
 // accretion for two hundred versions and then by measurement against somebody
 // else's corpus, and a reader who pastes a program in deserves to know which
 // build refused it. `ml -ver` prints the line; `ml -full` prints the survey.
-export const AIML_VERSION = '2.5';
+export const AIML_VERSION = '2.6';
 export const AIML_NAME = 'AI-ML';
 
 // THE CREDIT. One list, printed by -ver and again at the foot of -full, so the
@@ -1103,6 +1103,7 @@ function interpreterFor(ctx) {
     session: (ctx && ctx.session) || {},
     typecheck: (ctx && ctx.typecheck) || 'off',
     primitives: false,   // the station filters below already supply them
+    printing: 'bare',    // a verb returns a str; an obelisk prints CALYPSO, not "CALYPSO"
     builtins: () => makeBuiltins(ctx && ctx.station),
     hooks: {
       // A bare word that is not bound and not a verb HERE. Inside a machine's

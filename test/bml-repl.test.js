@@ -68,7 +68,9 @@ test('strict is the default: an ill-typed line is refused', () => {
 
 test('--sloppy honours the same line and names the clash', () => {
   const { out } = bml(['val x : int = "hello"', ':quit'], ['--sloppy']);
-  assert.match(out, /val x = hello/);
+  // v1.290: Standard ML prints a string WITH its quotes, and the REPL asks the
+  // language for SML's shape. The game keeps bare strings; see `printing`.
+  assert.match(out, /val x = "hello"/);
 });
 
 test('the prompt survives an error and keeps going', () => {

@@ -673,6 +673,48 @@ export function describeValue(v) {
   }
 }
 
+// Standard ML prints a string and a character WITH their delimiters — `"hi"`,
+// `#"a"` — and this build printed both bare, so `#"a"`, `"a"` and a variable
+// named `a` all echoed as `a`. Invisible inside the game, where the surrounding
+// text says which you are looking at; obvious the moment there is a REPL.
+//
+// It cannot simply be switched on. A NostOS verb returns a `str` exactly like an
+// ML string does, so quoting every answer would make an obelisk print
+// `"CALYPSO"` where it used to print `CALYPSO`. So the printer takes a mode and
+// the HOST picks: the REPL asks for Standard ML's shape, the game keeps its own.
+// Same argument as advisory-versus-strict, and the same answer.
+function quoted(text) {
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t')
+    .replace(/\r/g, '\\r');
+}
+
+// The answer as Standard ML would write it. Differs from formatValue only in
+// strings and characters, and recursively inside anything holding them.
+export function formatAnswer(v) {
+  if (!v) return '()';
+  switch (v.tag) {
+    case 'char': return `#"${quoted(v.v)}"`;
+    case 'str': return `"${quoted(v.v)}"`;
+    case 'list': return '[' + v.items.map(formatAnswer).join(', ') + ']';
+    case 'tuple': return '(' + v.items.map(formatAnswer).join(', ') + ')';
+    case 'record': return '{' + Object.keys(v.fields).map((k) => `${k} = ${formatAnswer(v.fields[k])}`).join(', ') + '}';
+    case 'ref': return `ref ${formatAnswer(v.cell.v)}`;
+    case 'con': {
+      if (!v.args || !v.args.length) return v.name;
+      const arg = (a) => (a && a.tag === 'con' && a.args && a.args.length ? `(${formatAnswer(a)})` : formatAnswer(a));
+      if (v.args.length > 1) return `${v.name} (${v.args.map(formatAnswer).join(', ')})`;
+      return `${v.name} ${v.args.map(arg).join(' ')}`;
+    }
+    case 'binding': return `val ${v.name} = ${formatAnswer(v.value)}`;
+    case 'bindings': return v.names.map((n, i) => `val ${n} = ${formatAnswer(v.values[i])}`).join('\n');
+    default: return formatValue(v);
+  }
+}
+
 export function formatValue(v) {
   if (!v) return '()';
   switch (v.tag) {
@@ -722,8 +764,11 @@ export function formatValue(v) {
 // If the program printed and its final value is unit (the usual case for an
 // echo/`;` sequence), show only the printed lines — no trailing "()". Otherwise the
 // printed lines come first, then the value.
-export function combineOutput(out, result) {
-  const tail = formatValue(result);
+// `sml` picks the printer for the ANSWER only. Anything already in `out` came
+// from `echo`, which prints what it was given: `print "hi"` writes hi, in
+// Standard ML too.
+export function combineOutput(out, result, sml) {
+  const tail = sml ? formatAnswer(result) : formatValue(result);
   if (!out || !out.length) return tail;
   if (result && result.tag === 'unit') return out.join('\n');
   return out.join('\n') + '\n' + tail;

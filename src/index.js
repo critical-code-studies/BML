@@ -23,7 +23,7 @@ export const BML_NAME = 'BML';
 // The number continues AI-ML's rather than restarting, because it is the same
 // language: the history in the NostOS repository is this language's history,
 // and a fresh 0.1.0 would throw that away to look new.
-export const BML_VERSION = '2.5';
+export const BML_VERSION = '2.6';
 
 export const BML_CREDIT = [
   'BML created by David M. Berry, 2026.',

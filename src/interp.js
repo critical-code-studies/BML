@@ -79,6 +79,12 @@ export function createInterpreter(opts = {}) {
   const builtinsFor = (hostCtx) => (usePrims
     ? { ...PRIMITIVES, ...hostBuiltins(hostCtx) }
     : hostBuiltins(hostCtx));
+  // opts.printing: 'sml' quotes strings and characters in the ANSWER, as
+  // Standard ML does; 'bare' prints them raw. Defaults to SML's shape for the
+  // same reason typecheck defaults strict — this is an ML unless a host says
+  // otherwise — and NostOS says otherwise, because its verbs return strings
+  // and an obelisk should print CALYPSO rather than "CALYPSO".
+  const sml = (opts.printing || 'sml') === 'sml';
   const hooks = opts.hooks || {};
   const session = opts.session || {};
 
@@ -166,7 +172,7 @@ export function createInterpreter(opts = {}) {
       // closure, so any caller that stringifies a result hits a cycle — one did
       // the moment it was added. When something actually needs the raw value it
       // can have a separate call that says so.
-      return { ok: true, text: combineOutput(out, result) };
+      return { ok: true, text: combineOutput(out, result, sml) };
     } catch (e) {
       if (e instanceof RonmlRaise) {
         return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}` };

@@ -32,7 +32,11 @@ export const REAL = con('real');
 export const CHAR = con('char');
 // Kept as a name for the places that only care that it is a number.
 export const NUM = INT;
-export const STR = con('str');
+// `string`, which is its name in Standard ML. It printed as `str` until v1.290,
+// so `explode` reported `str -> char list` where SML says `string -> char list`.
+// The TAG on a runtime value is still 'str'; this is only what the type is
+// called when a type is printed.
+export const STR = con('string');
 export const BOOL = con('bool');
 export const UNIT = con('unit');
 export const listOf = (t) => con('list', [t]);

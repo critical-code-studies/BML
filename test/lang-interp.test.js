@@ -63,7 +63,8 @@ test('the host supplies builtins, and they receive the host ctx untouched', () =
       shout: { arity: 1, fn: ([v], ctx) => { seen.push(ctx.who); return { tag: 'str', v: `${v.v}!` }; } },
     },
   });
-  assert.equal(bml.run('shout "hi"', { who: 'tester' }).text, 'hi!');
+  // Quoted, because an interpreter prints Standard ML's shape unless told not to.
+  assert.equal(bml.run('shout "hi"', { who: 'tester' }).text, '"hi!"');
   assert.deepEqual(seen, ['tester'], 'the host ctx reaches the builtin');
 });
 
