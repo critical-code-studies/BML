@@ -13,6 +13,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Declared before `bml` below uses it.
+
 const BML = new URL('../bin/bml.js', import.meta.url).pathname;
 
 // Run the REPL with `lines` on stdin and return everything it printed. Exit
@@ -25,6 +27,7 @@ function bml(lines, args = []) {
       input: Array.isArray(lines) ? `${lines.join('\n')}\n` : lines,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, BML_VERSION_CACHE: CACHE },
     });
   } catch (e) {
     r.out = `${e.stdout || ''}${e.stderr || ''}`;
@@ -180,7 +183,11 @@ test('a closed pipe is not an error', () => {
 // it, or in CI, or inside somebody's test suite, is doing something its README
 // does not say it does.
 
-const CACHE = path.join(os.tmpdir(), 'bml-version-check.json');
+// ITS OWN cache, never the real one. The first version of these tests wrote
+// the path the installed tool reads, so running the suite left every later
+// interactive session announcing a version that does not exist. A fixture that
+// can reach the thing it tests is not a fixture.
+const CACHE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bml-vc-')), 'cache.json');
 const fakeCache = (latest) =>
   fs.writeFileSync(CACHE, JSON.stringify({ at: Date.now(), latest }));
 
@@ -209,4 +216,26 @@ test('BML_NO_UPDATE_CHECK turns it off and says so', () => {
   });
   assert.match(out, /update check off/);
   assert.doesNotMatch(out, /up to date|is available/, 'it did not reach the network');
+});
+
+test('the suite never writes the cache the installed tool reads', () => {
+  // This is the regression. A fixture planted 99.0.0 in the real cache to prove
+  // a piped session stays quiet, and every interactive session afterwards
+  // announced an update that did not exist. Running the tests must not change
+  // what the tool does for the person who ran them.
+  const real = path.join(os.tmpdir(), 'bml-version-check.json');
+  const before = fs.existsSync(real) ? fs.readFileSync(real, 'utf8') : null;
+  fakeCache('99.0.0');
+  bml([':quit']);
+  const after = fs.existsSync(real) ? fs.readFileSync(real, 'utf8') : null;
+  assert.equal(after, before, 'the real cache was touched by a test');
+});
+
+test('a cache holding junk is ignored rather than believed', () => {
+  const junk = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bml-vc-')), 'c.json');
+  fs.writeFileSync(junk, JSON.stringify({ at: Date.now(), latest: 'not-a-version' }));
+  const out = execFileSync('node', [BML, '--examples', '--help'], {
+    encoding: 'utf8', env: { ...process.env, BML_VERSION_CACHE: junk, BML_NO_UPDATE_CHECK: '1' },
+  });
+  assert.doesNotMatch(out, /not-a-version/);
 });

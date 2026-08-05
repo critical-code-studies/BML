@@ -51,13 +51,19 @@ const files = argv.filter((a) => !a.startsWith('-'));
 // second and a half, and fails silently, so it can never delay or break a
 // session. `BML_NO_UPDATE_CHECK=1` turns it off entirely.
 const VERSION_URL = 'https://raw.githubusercontent.com/critical-code-studies/BML/main/package.json';
-const CACHE = path.join(os.tmpdir(), 'bml-version-check.json');
+// The cache path is overridable, and the tests override it. They used to write
+// the REAL one: a test planted a cache claiming 99.0.0 was out, to prove a
+// piped session stays quiet, and every later interactive session read it and
+// announced an update that did not exist. Test fixtures must not be able to
+// reach into the thing they are testing.
+const CACHE = process.env.BML_VERSION_CACHE || path.join(os.tmpdir(), 'bml-version-check.json');
 const DAY = 24 * 60 * 60 * 1000;
 
 function cached() {
   try {
     const c = JSON.parse(fs.readFileSync(CACHE, 'utf8'));
-    if (c && typeof c.at === 'number' && Date.now() - c.at < DAY) return c.latest;
+    if (c && typeof c.at === 'number' && Date.now() - c.at < DAY
+        && /^\d+\.\d+\.\d+$/.test(String(c.latest || ''))) return c.latest;
   } catch { /* no cache, or unreadable: check again */ }
   return null;
 }
