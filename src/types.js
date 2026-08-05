@@ -341,6 +341,10 @@ export function infer(node, env, cons) {
       return t;      // int or real, whichever it was
     }
 
+    // `()` is the one value of type unit. It had no case here at all and took
+    // the fresh-variable fallback, so `:t ()` answered `'a`.
+    case 'Unit': return UNIT;
+
     case 'Var': {
       const k = node.name.toLowerCase();
       if (Object.prototype.hasOwnProperty.call(env, k)) return instantiate(env[k]);

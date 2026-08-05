@@ -479,16 +479,30 @@ export function parse(toks, fixityIn) {
     return !!toks[q] && toks[q].t === 'EQ';
   }
 
+  // TWO LEVELS, because Standard ML has two: `andalso` binds tighter than
+  // `orelse`, so `true orelse true andalso false` is `true orelse (true andalso
+  // false)` and answers true. This was one flat loop and therefore purely
+  // left-to-right, which read it as `(true orelse true) andalso false` and
+  // answered FALSE. A wrong answer with no error, in an operator anyone writing
+  // a guard reaches for.
   function parseBool() {
+    let left = parseAndalso();
+    while (peek().t === 'IDENT' && ['or', 'orelse'].includes(peek().v.toLowerCase())) {
+      p++;
+      left = { type: 'Bool', op: 'or', left, right: parseAndalso() };
+    }
+    return left;
+  }
+
+  function parseAndalso() {
     let left = parseCompare();
     // `and` is both boolean conjunction and the separator between simultaneous
     // bindings. Take it as boolean only when what follows is not a binding, or
     // `let a = 1 and b = 2 in …` swallows the second name and then trips on =.
-    const BOOLW = { and: 'and', andalso: 'and', or: 'or', orelse: 'or' };
-    while (peek().t === 'IDENT' && BOOLW[peek().v.toLowerCase()]
+    while (peek().t === 'IDENT' && ['and', 'andalso'].includes(peek().v.toLowerCase())
       && !(peek().v.toLowerCase() === 'and' && andIsBinding())) {
-      const op = BOOLW[toks[p++].v.toLowerCase()];
-      left = { type: 'Bool', op, left, right: parseCompare() };
+      p++;
+      left = { type: 'Bool', op: 'and', left, right: parseCompare() };
     }
     return left;
   }

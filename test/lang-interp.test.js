@@ -235,3 +235,23 @@ test('a multi-argument constructor typechecks in both spellings', () => {
   assert.equal(r.ok, true, `a clausal fun over both: ${r.text}`);
   assert.equal(bml.typeReport('ins'), "(t * 'a) -> t");
 });
+
+test('andalso binds tighter than orelse, as it does in Standard ML', () => {
+  // Reported from the departure register (D-01). Both were parsed at one flat
+  // level and therefore purely left to right, so this read as
+  // `(true orelse true) andalso false` and answered FALSE. A wrong answer with
+  // no error, in the operator anyone writing a guard reaches for.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('true orelse true andalso false').text, 'true');
+  assert.equal(bml.run('false andalso true orelse true').text, 'true');
+  assert.equal(bml.run('true andalso false orelse true').text, 'true');
+  assert.equal(bml.run('false orelse false andalso true').text, 'false');
+  // `and` is also the separator between simultaneous bindings, and still is.
+  assert.equal(bml.run('let val a = 1 and b = 2 in a + b end').text, '3');
+});
+
+test('unit has a type', () => {
+  // D-40: `()` had no case in the checker and took the fresh-variable fallback.
+  const bml = createInterpreter({ typecheck: 'report' });
+  assert.equal(bml.typeReport('()'), 'unit');
+});
