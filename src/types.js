@@ -246,6 +246,8 @@ function checkExhaustive(subject, arms, cons) {
 
 // The datatype-to-constructors map for the line being inferred. Set by typeOf.
 let CURRENT_DATACONS = {};
+// Arity per constructor, so the App case can recognise the tuple form.
+let CURRENT_CONARITY = {};
 
 function inferPattern(pat, binds, cons) {
   switch (pat.p) {
@@ -284,7 +286,19 @@ function inferPattern(pat, binds, cons) {
         // to carry, and the whole thing has the datatype's type.
         const inst = instantiate(c);
         let t = inst;
-        for (const arg of pat.args) {
+        // The same two spellings the expression side accepts: `N (l, v, r)` is
+        // Standard ML's, one argument that is a tuple, and `N l v r` is this
+        // build's curried form. A pattern arrives as ONE arg holding a tuple in
+        // the first case, so peeling a single arrow off a three-argument
+        // constructor left `'b -> 'c -> t` where `t` was wanted. Fixing this on
+        // the expression side alone was not enough: a clausal `fun` matches on
+        // the pattern before it builds anything.
+        const arity = CURRENT_CONARITY[pat.name];
+        const args = (arity > 1 && pat.args.length === 1 && pat.args[0] && pat.args[0].p === 'tuple'
+                      && pat.args[0].items.length === arity)
+          ? pat.args[0].items
+          : pat.args;
+        for (const arg of args) {
           const at = inferPattern(arg, binds, cons);
           const res = fresh();
           unify(t, fnOf(at, res));
@@ -347,6 +361,25 @@ export function infer(node, env, cons) {
     }
 
     case 'App': {
+      // A multi-argument constructor may be applied to a TUPLE, `N (a, b, c)`,
+      // which is how Standard ML writes it, as well as curried, `N a b c`,
+      // which is this build's own spelling. The evaluator learned both in
+      // v1.282 and the checker did not, so `fun ins (L, x) = N (L, x, L)` was
+      // refused as ill-typed — and strict is the DEFAULT, so the default mode
+      // rejected a correct program that advisory mode ran perfectly.
+      if (node.fn && node.fn.type === 'Var' && node.arg && node.arg.type === 'Tuple'
+          && cons[node.fn.name]) {
+        const arity = CURRENT_CONARITY[node.fn.name];
+        if (arity > 1 && arity === node.arg.items.length) {
+          let t = instantiate(cons[node.fn.name]);
+          for (const item of node.arg.items) {
+            const step = fresh();
+            unify(t, fnOf(infer(item, env, cons), step));
+            t = step;
+          }
+          return t;
+        }
+      }
       const f = infer(node.fn, env, cons);
       const arg = infer(node.arg, env, cons);
       const res = fresh();
@@ -569,6 +602,7 @@ export function typeOf(ast, session = {}) {
   for (const k of Object.keys(reg)) env[k] = reg[k];
   for (const k of Object.keys(session.__contypes || {})) cons[k] = session.__contypes[k];
   CURRENT_DATACONS = session.__datacons || {};
+  CURRENT_CONARITY = session.__conarity || {};
   try {
     const t = infer(ast, env, cons);
     return { ok: true, type: show(t), t, warnings: WARNINGS.slice() };
@@ -606,6 +640,8 @@ export function remember(ast, session, t) {
       let ty = self;
       for (let i = 0; i < c.arity; i++) ty = fnOf(fresh(), ty);
       session.__contypes[c.name] = generalise({}, ty);
+      if (!session.__conarity) session.__conarity = {};
+      session.__conarity[c.name] = c.arity;
     }
   }
 }

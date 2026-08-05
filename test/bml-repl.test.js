@@ -168,7 +168,7 @@ test('help lists forms the language actually has', () => {
 test('a closed pipe is not an error', () => {
   // `bml | head -1` shuts stdout while readline is still writing a prompt, and
   // node turned that into an unhandled EPIPE and a stack trace.
-  const out = execFileSync('sh', ['-c', `printf ':quit\\n' | node ${BML} 2>&1 | head -1`], { encoding: 'utf8' });
+  const out = execFileSync('sh', ['-c', `printf ':quit\\n' | node ${BML} 2>&1 | head -6`], { encoding: 'utf8' });
   assert.doesNotMatch(out, /EPIPE|Unhandled|at Socket/);
   assert.match(out, /BML/);
 });

@@ -66,6 +66,8 @@ bml.loadPrelude();
 // screenshot of a session carries its own provenance.
 function banner() {
   return [
+    '',
+    '------------------------------------------------------------',
     `${BML_NAME} ${BML_VERSION}, a little Standard ML${sloppy ? '  (advisory)' : ''}`,
     'Created by David M. Berry, University of Sussex, 2026.',
     'Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.',
@@ -74,6 +76,7 @@ function banner() {
       ? 'advisory: a clash is named and the line runs anyway.'
       : 'strict: use typecheck',
     'Type help for the forms, :quit to leave.',
+    '------------------------------------------------------------',
     '',
   ].join('\n');
 }

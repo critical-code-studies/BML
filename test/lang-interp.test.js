@@ -220,3 +220,18 @@ test('an unknown name still falls back rather than erroring', () => {
   const bml = createInterpreter({ typecheck: 'report' });
   assert.equal(bml.typeReport('someVerbTheHostSupplies'), "'a");
 });
+
+test('a multi-argument constructor typechecks in both spellings', () => {
+  // `N (a, b, c)` is Standard ML's; `N a b c` is this build's curried form. The
+  // evaluator learned both in v1.282 and the checker did not, so a tree program
+  // that ran perfectly under advisory was REFUSED by strict — which is the
+  // default, so the default mode rejected correct code. It needed fixing on the
+  // pattern side too: a clausal `fun` matches before it builds.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.run('datatype t = L | N of t * int * t');
+  assert.equal(bml.run('N (L, 1, L)').ok, true, 'tuple form, as SML writes it');
+  assert.equal(bml.run('N L 1 L').ok, true, 'curried form');
+  const r = bml.run('fun ins (L, x) = N (L, x, L) | ins (N (l,v,r), x) = N (l, v, r)');
+  assert.equal(r.ok, true, `a clausal fun over both: ${r.text}`);
+  assert.equal(bml.typeReport('ins'), "(t * 'a) -> t");
+});
