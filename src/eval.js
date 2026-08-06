@@ -213,7 +213,24 @@ function applyBinOp(op, l, r) {
   }
 }
 
+// PROPER TAIL CALLS (docs/tail-calls-plan.md). Standard ML requires them, and
+// this evaluator did not have them: every sub-expression recursed, so how deep a
+// program could go was whatever the host stack had left. `count 5000` faulted at
+// about 1950, and the same program passed alone and failed inside a full test
+// run, which made one test a barometer for unrelated changes.
+//
+// The body is a loop. In every TAIL position — where the value of the
+// sub-expression IS the value of this one — the case reassigns `node` (and
+// `env`, `ctx`, `builtins` where they change) and `continue`s, rather than
+// calling back into evalNode and waiting. The step counter is inside the loop,
+// so a tail loop still counts and the budget still bounds a program that never
+// comes back.
+//
+// This does NOT make non-tail recursion unbounded. `fact n = n * fact (n-1)` has
+// work to do after the call returns, so its frames are genuinely needed and it
+// stays where it was. See stage 2 in the plan for what removing that would cost.
 export function evalNode(node, env, ctx, builtins) {
+  for (;;) {
   if (++STEPS > FUEL) throw new RonmlFuelError('step budget exceeded');
   switch (node.type) {
     case 'Lit': return { tag: node.real ? 'real' : 'int', v: node.value };
@@ -244,7 +261,8 @@ export function evalNode(node, env, ctx, builtins) {
     }
     case 'Seq': {
       evalNode(node.left, env, ctx, builtins);   // run the left for its effect, discard its value
-      return evalNode(node.right, env, ctx, builtins);
+      node = node.right;
+      continue;
     }
     case 'Bool': {
       const l = evalNode(node.left, env, ctx, builtins);
@@ -258,7 +276,8 @@ export function evalNode(node, env, ctx, builtins) {
     case 'If': {
       const c = evalNode(node.cond, env, ctx, builtins);
       if (!c || c.tag !== 'bool') throw new RonmlError('if needs a true/false test — try: if n == 0 then 1 else 0');
-      return evalNode(c.v ? node.then : node.else, env, ctx, builtins);
+      node = c.v ? node.then : node.else;
+      continue;
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Unit': return { tag: 'unit' };
@@ -273,7 +292,7 @@ export function evalNode(node, env, ctx, builtins) {
       r.cell.v = evalNode(node.value, env, ctx, builtins);
       return { tag: 'unit' };
     }
-    case 'Annot': return evalNode(node.expr, env, ctx, builtins);
+    case 'Annot': node = node.expr; continue;
     case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Record': {
       const fields = {};
@@ -558,14 +577,18 @@ export function evalNode(node, env, ctx, builtins) {
     // the definition it is.
     case 'Case': {
       const v = evalNode(node.subject, env, ctx, builtins);
+      let matched = false;
       for (const arm of node.arms) {
         const binds = matchPattern(arm.pat, v, ctx);
         if (binds) {
           const scope = Object.create(env);
           for (const k of Object.keys(binds)) scope[k.toLowerCase()] = binds[k];
-          return evalNode(arm.body, scope, ctx, builtins);
+          node = arm.body; env = scope;
+          matched = true;
+          break;
         }
       }
+      if (matched) continue;
       throw new RonmlError(`no case matches ${describeValue(v)} — add an arm, or _ => … to catch the rest`);
     }
     case 'Var': {
@@ -623,7 +646,8 @@ export function evalNode(node, env, ctx, builtins) {
     case 'LetRec': {
       const env2 = Object.create(env);
       for (const b of node.binds) env2[b.name.toLowerCase()] = evalNode(b.value, env2, ctx, builtins);
-      return evalNode(node.body, env2, ctx, builtins);
+      node = node.body; env = env2;
+      continue;
     }
 
     case 'Let': {
@@ -634,7 +658,8 @@ export function evalNode(node, env, ctx, builtins) {
       // one expression, with no top level to recurse at.)
       const env2 = Object.create(env);
       env2[node.name.toLowerCase()] = evalNode(node.value, env2, ctx, builtins);
-      return evalNode(node.body, env2, ctx, builtins);
+      node = node.body; env = env2;
+      continue;
     }
     case 'TopLet': {
       // Bare top-level `let x = e`: evaluate `e`, then persist the binding into
@@ -670,14 +695,22 @@ export function evalNode(node, env, ctx, builtins) {
       // program running and exhausting the host stack. Harper's N-queens in
       // continuation-passing style sits close enough to that line to notice.
       if (fn && fn.tag === 'closure') {
+        // THE tail call. A closure's body is evaluated in place of this node
+        // rather than underneath it, so a function that ends in a call to
+        // another (or itself) uses no more host stack than one that ends in a
+        // number. The closure carries its own ctx and builtins, so those move
+        // too — a closure made at one station and called at another must still
+        // see the verbs it was made with.
         const env2 = Object.create(fn.env);
         env2[fn.param.toLowerCase()] = arg;
-        return evalNode(fn.body, env2, fn.ctx, fn.builtins);
+        node = fn.body; env = env2; ctx = fn.ctx; builtins = fn.builtins;
+        continue;
       }
       return applyValue(fn, arg);
     }
     default:
       throw new RonmlError('malformed command');
+  }
   }
 }
 

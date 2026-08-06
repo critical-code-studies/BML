@@ -145,6 +145,12 @@ function stripComments(src) {
 // Mechanically translate the parts of SML that AI-ML spells differently.
 // Clausal definitions become one `case`, which is the single biggest rewrite
 // and the one Harper's own Restrictions note predicts.
+// The Basis structures with no implementation at all. Named once, so the
+// summary at the end prints THIS list rather than a sentence about it: the
+// sentence has been wrong after every addition since v1.252.
+const SKIPPED_STRUCTURES = ['Word', 'Array', 'Vector', 'IO', 'TextIO', 'OS', 'Math', 'General', 'Substring'];
+const SKIP_RE = new RegExp(`\\b(${SKIPPED_STRUCTURES.join('|')})\\.`);
+
 function translate(d) {
   let s = d;
   // PRUNE THIS WHENEVER THE LANGUAGE GROWS. It has been out of date after every
@@ -154,14 +160,18 @@ function translate(d) {
   // at v1.273 — all four of which v1.257 had added. Each time the score
   // under-reported and the gain was invisible.
   //
-  // Every entry below was re-verified against the interpreter on 2026-07-27 by
+  // Every entry below was re-verified against the interpreter on 2026-08-06 by
   // running an example of it, not by reading the code. `local`, `functor`,
   // `ref`/`:=`, and the List/String/Int/Option structures all work and are no
   // longer skipped.
-  if (/^(infix|infixr|nonfix|open|abstype)\b/.test(s)) return null;  // no fixity, no open, no abstype
-  // Char and Real were added to the prelude in v1.285 (L-G) and are no longer
-  // skipped. Everything still listed here has no implementation at all.
-  if (/\b(Word|Array|Vector|IO|TextIO|OS|Math|General|Substring)\./.test(s)) return null;
+  //
+  // v1.303: `infix`, `infixr`, `nonfix`, `open` and `abstype` came off this
+  // line, and the warning above was right for the fifth time — `infix` landed
+  // at L-E, `open` at v1.300 and `abstype` at v1.302, and the skip stayed put
+  // through all three, so the score under-reported each time. Char and Real
+  // were added to the prelude at v1.285 (L-G) and are likewise not skipped.
+  // Everything still listed here has no implementation at all.
+  if (SKIP_RE.test(s)) return null;
 
   // Nothing else is rewritten. #"a" is a char here now, ~n is unary minus,
   // annotations are checked, andalso/orelse are spelled as they are in ML, and
@@ -237,8 +247,15 @@ for (const r of report) {
 const T = report.reduce((a, r) => ({ a: a.a + r.attempted, o: a.o + r.ok, s: a.s + r.skipped }), { a: 0, o: 0, s: 0 });
 console.log(`\nTOTAL attempted ${T.a}, ran ${T.o} (${Math.round(T.o / T.a * 100)}%), skipped as out-of-scope ${T.s}`);
 
-console.log('\nThe skipped ones are the remaining documented absences: infix/nonfix,');
-console.log('open, abstype, and the Basis structures beyond List/String/Int/Option.');
-console.log('See the Restrictions page in the game, and docs/ob-terminal-language.md.');
+// This line goes stale every time the language grows, which is the whole
+// history of the skip list above. Print the skip patterns themselves rather
+// than a sentence describing them, so it cannot describe the wrong thing.
+console.log(`\nSkipped as out of scope: declarations mentioning ${SKIPPED_STRUCTURES.join(', ')},`);
+console.log('and any whose last token is `=` (the splitter cut them mid-declaration).');
+// No pointer to a document here. This file ships in TWO repositories — NostOS,
+// which has the Restrictions page and docs/ob-terminal-language.md, and BML,
+// which has neither — and the line named both, so half the time it pointed at
+// nothing. The skip list is right above; it is the document.
+console.log(`Edit SKIPPED_STRUCTURES in ${import.meta.url.split('/').pop()} when one of them lands.`);
 
 }

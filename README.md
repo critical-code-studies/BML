@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.8.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.9.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.8.0, a little Standard ML
+BML 0.9.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -54,9 +54,14 @@ ERR: string and int are not the same type
 ## What is here
 
 The core language: `val`, `fun` (clausal, curried, tuple-argument), `fn`, `let`,
-`case`, `datatype` with type variables, records, tuples, exceptions, mutable
-references, `local`, and `infix`/`infixr`/`nonfix`/`op`. Modules: `structure`,
-`signature`, and generative functors.
+`case`, `datatype` with type variables, `abstype`, `withtype`, records, tuples,
+exceptions (raised, handled, and the standard ones catchable by name), mutable
+references, `while … do`, `local`, `open`, and `infix`/`infixr`/`nonfix`/`op`.
+Modules: `structure`, `signature`, and generative functors.
+
+Tail calls are proper, as the Definition requires, so an accumulator loop or a
+continuation-passing program runs to whatever depth the step budget allows
+rather than to whatever the host stack has left.
 
 Types are inferred by Hindley-Milner with the occurs check, let-polymorphism and
 the value restriction, with exhaustiveness warnings on `case`. The Basis subset
@@ -64,8 +69,8 @@ is written in BML itself and loaded as source, so you can open `src/basis.js` an
 read the same `map` you would have written.
 
 It is measured rather than described. Against the 32 example files from Robert
-Harper's *Introduction to Standard ML* course, this build runs **320 of 395
-top-level declarations (81%)** as written, with no translation:
+Harper's *Introduction to Standard ML* course, this build runs **329 of 399
+top-level declarations (82%)** as written, with no translation:
 
 ```
 node tools/isml-conformance.mjs
@@ -152,14 +157,23 @@ with it for the record even though the file itself is gone.
 
 ## What it is not
 
-Not SML '97. The full Basis of 47 structures, `abstype`, sharing constraints and
-functor signatures are years of work no teaching implementation attempts.
+Not SML '97. The full Basis of 47 structures, sharing constraints and functor
+signatures are years of work no teaching implementation attempts.
 
-Known gaps, kept honest by a register a test walks. Nothing outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`, `Option`,
-`ListPair`. Identifiers are lower-cased, which Standard ML does not do, so `foo`
-and `Foo` name the same value. Recursion depth is the host's rather than the
-interpreter's, so a deep non-tail recursion can exhaust the JavaScript stack
-before the step budget notices.
+The gaps are catalogued rather than described, in a register that a test walks
+so that fixing one turns the test red and names the entry to delete. About 18%
+of Harper's corpus still does not run as written.
+
+Nothing in the Basis outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`,
+`Option`, `ListPair`. Identifiers are lower-cased, which Standard ML does not
+do, so `foo` and `Foo` name the same value.
+
+**Non-tail** recursion depth is the host's rather than the interpreter's, so
+`fun fact n = … n * fact (n - 1)` runs out of JavaScript stack in the low
+thousands before the step budget notices. Tail calls are proper, as the
+Definition requires, so an accumulator loop or a continuation-passing program
+runs to whatever depth the step budget allows and does not touch the stack at
+all.
 
 ## The update check
 

@@ -12,6 +12,38 @@ import { tokenize } from './lex.js';
 
 // ---- Parser: expr -> tiny AST (Let, App, Var, Lit, ListLit) -----------
 
+// Every word that can BEGIN a declaration, and the words that close a block.
+// Three parsers need them, and each had written its own answer or none at all.
+//
+// The shared problem is a loop that consumes identifiers until it runs out.
+// `skipTypeExpr` skips a type rather than parsing one; `open A B C` and
+// `infix 6 f g` both take a list of names. A word missing from the stop list
+// is not reported, it is EATEN — so at v1.302:
+//
+//   abstype q = T of int with fun mk n = T n end   the `with` went into the
+//                                                  type, the with-block was
+//                                                  never parsed
+//   struct open List val v = 1 end                 `open` took `List val v`
+//                                                  as three structure names
+//   struct infix 6 pl val v = 1 end                `infix` took `pl val v` as
+//                                                  three operators, so `v` was
+//                                                  never declared
+//
+// The abstype case had a test and passed it, because the test wrote
+// `abstype ab = A with …` — no payload, so no type to skip. The payload is the
+// reason to write `abstype` at all.
+//
+// One list, three uses, and a test that walks every word in it.
+export const DECL_KEYWORDS = [
+  'val', 'fun', 'type', 'datatype', 'abstype', 'exception', 'structure',
+  'signature', 'functor', 'local', 'open', 'infix', 'infixr', 'nonfix',
+  'withtype',
+];
+// A type or a name list can also be the last thing before one of these.
+export const BLOCK_ENDERS = ['with', 'end', 'in', 'and'];
+const STOPS = [...DECL_KEYWORDS, ...BLOCK_ENDERS];
+const isStop = (t) => t && t.t === 'IDENT' && STOPS.includes(t.v.toLowerCase());
+
 function isKeyword(tok, word) {
   // `val` is Standard ML's word for a value binding. Accepted as a synonym for
   // `let` so that a line copied out of a manual binds rather than complains.
@@ -778,7 +810,7 @@ export function parse(toks, fixityIn) {
       // here swallowed the arrow of every `fn x : ty => e`.
       if (t.t === 'STAR' || t.t === 'ARROWT' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
       if (t.t === 'COLON' && depth) { p++; continue; }   // `{n : int}` inside a record type
-      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and', 'withtype'].includes(t.v.toLowerCase())) { keep(t); p++; continue; }
+      if (t.t === 'IDENT' && !isStop(t)) { keep(t); p++; continue; }
       if (t.t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') { p += 2; continue; }
       break;
     }
@@ -854,7 +886,7 @@ export function parse(toks, fixityIn) {
       const names = [];
       // The operators being declared. They are ordinary identifiers, and any
       // symbolic ones (`**`) arrive as whatever the lexer made of them.
-      while (peek().t === 'IDENT' || OP_SYM[peek().t] || peek().t === 'STAR') {
+      while ((peek().t === 'IDENT' && !isStop(peek())) || OP_SYM[peek().t] || peek().t === 'STAR') {
         const t = toks[p++];
         names.push(t.t === 'IDENT' ? t.v : (OP_SYM[t.t] || t.v));
       }
@@ -1013,7 +1045,7 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'open')) {
       p++;
       const names = [];
-      while (peek().t === 'IDENT') names.push(toks[p++].v);
+      while (peek().t === 'IDENT' && !isStop(peek())) names.push(toks[p++].v);
       if (!names.length) throw new RonmlError('open what? — try: open List');
       return { type: 'OpenDecl', names };
     }

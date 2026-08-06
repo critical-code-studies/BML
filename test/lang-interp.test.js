@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInterpreter, smlEcho, flattenSession, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
+import { DECL_KEYWORDS, BLOCK_ENDERS } from '../src/parse.js';
 
 test('an interpreter with no host at all still runs Standard ML', () => {
   const bml = createInterpreter();
@@ -536,4 +537,121 @@ test('the checker still refuses an ill-typed multi-binding let', () => {
   // refusing anything written this way.
   const bml = createInterpreter({ typecheck: 'strict' });
   assert.equal(bml.run('let val g = fn x => x ^ "!" in g 1 end').ok, false);
+});
+
+// ---- proper tail calls (v1.303) ---------------------------------------------
+
+test('a tail call uses no stack, so deep tail recursion runs', () => {
+  // D-50, the last entry in the register. Standard ML REQUIRES proper tail
+  // calls; this evaluator recursed for every sub-expression, so depth was
+  // whatever the host stack had left — about 1950 before this landed.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('fun count n = if n = 0 then 0 else count (n - 1)');
+  assert.equal(bml.run('count 5000', { fuel: 10000000 }).text, '0', 'D-50\'s own example');
+  assert.equal(bml.run('count 200000', { fuel: 10000000 }).text, '0');
+  // An accumulator, which is how you write a loop in ML.
+  bml.run('fun sum (n, acc) = if n = 0 then acc else sum (n - 1, acc + n)');
+  assert.equal(bml.run('sum (100000, 0)', { fuel: 10000000 }).text, '5000050000');
+});
+
+test('a tail call through case and let is still a tail call', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('fun walk 0 = "done" | walk n = case n of _ => walk (n - 1)');
+  assert.equal(bml.run('walk 50000', { fuel: 10000000 }).text, '"done"');
+  bml.run('fun viaLet n = if n = 0 then 0 else let val m = n - 1 in viaLet m end');
+  assert.equal(bml.run('viaLet 50000', { fuel: 10000000 }).text, '0');
+});
+
+test('the budget still bounds a program that never comes back', () => {
+  // A tail loop counts steps like anything else, so removing the stack limit
+  // must not remove the thing that stops a runaway.
+  const bml = createInterpreter({ typecheck: 'off' });
+  const r = bml.run('let f x = f x in f 1 end', { fuel: 20000 });
+  assert.equal(r.ok, false);
+  assert.match(r.text, /step budget/);
+});
+
+test('non-tail recursion is still bounded, and says so honestly', () => {
+  // `fact` does work AFTER the call returns, so its frames are genuinely
+  // needed. It got deeper (the If frames on the way are gone) but it is not
+  // unbounded, and the README says so rather than implying the problem is gone.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('fun fact n = if n = 0 then 1 else n * fact (n - 1)');
+  assert.equal(bml.run('fact 20', { fuel: 10000000 }).ok, true);
+  assert.equal(bml.run('fact 2500', { fuel: 100000000 }).ok, true, 'deeper than the old ~2000 ceiling');
+});
+
+test('a closure carries its own ctx and builtins through a tail jump', () => {
+  // A tail jump reassigns ctx and builtins along with node and env, so a
+  // function made at one station and called from another still runs against
+  // the verbs and the world it was made with, however many jumps later.
+  const seen = [];
+  const bml = createInterpreter({
+    typecheck: 'off',
+    builtins: { note: { arity: 1, fn: ([v], c) => { seen.push(c && c.who); return v; } } },
+  });
+  bml.run('fun go n = if n = 0 then note 1 else go (n - 1)', { who: 'made-here' });
+  bml.run('go 3', { who: 'called-here' });
+  assert.deepEqual(seen, ['made-here'], 'three tail jumps later, still the defining ctx');
+});
+
+// ---- one stop list, three parsers (v1.303) ---------------------------------
+
+test('a declaration keyword stops a type, an open list and a fixity list', () => {
+  // Three parsers consume identifiers until they run out: skipTypeExpr, which
+  // skips a type rather than parsing one, and the name lists of `open` and
+  // `infix`. A word missing from the stop list is not reported, it is eaten.
+  // All three had written their own answer or none, and all three were wrong.
+  //
+  // Each case declares something in a context where declarations legally sit
+  // side by side, then probes that the SECOND one took effect.
+  const CASES = [
+    // skipTypeExpr — a constructor payload is the only way to reach it
+    ['with',       'abstype q = T of int with fun mk n = T n end',                    'mk 1',  'T 1'],
+    ['struct val', 'structure S = struct datatype q = T of int val v = 9 end',        'S.v',   '9'],
+    ['struct open','structure S = struct datatype q = T of int open List val v = 1 end', 'S.v', '1'],
+    ['struct loc', 'structure S = struct datatype q = T of int local val a = 7 in val b = a end end', 'S.b', '7'],
+    ['struct exn', 'structure S = struct datatype q = T of int exception Boom val v = 2 end', 'S.v', '2'],
+    ['struct abs', 'structure S = struct datatype q = T of int abstype r = R with val m = R end end', 'S.m', 'R'],
+    ['struct str', 'structure S = struct datatype q = T of int structure I = struct val k = 3 end end', 'S.I.k', '3'],
+    ['struct wt',  'structure S = struct datatype q = T of int withtype al = int val v = 4 end', 'S.v', '4'],
+    ['local',      'local datatype q = T of int in val v = 5 end',                    'v',     '5'],
+    // the `open` name list
+    ['open+val',   'structure S = struct open List val v = 1 end',                    'S.v',   '1'],
+    ['open+two',   'structure S = struct open List Int val v = 2 end',                'S.v',   '2'],
+    ['open+end',   'structure S = struct val k = 6 open List end',                    'S.k',   '6'],
+    // the fixity name list
+    ['infix+val',  'structure S = struct infix 6 pl val v = 1 end',                   'S.v',   '1'],
+    ['infixr+val', 'structure S = struct infixr 5 ct val v = 2 end',                  'S.v',   '2'],
+    ['nonfix+val', 'structure S = struct nonfix junk val v = 3 end',                  'S.v',   '3'],
+  ];
+  for (const [word, decl, probe, want] of CASES) {
+    const bml = createInterpreter({ typecheck: 'off' });
+    bml.loadPrelude();
+    const d = bml.run(decl);
+    assert.equal(d.ok, true, `${word}: the declaration was refused — ${d.text}`);
+    const r = bml.run(probe);
+    assert.equal(r.ok, true, `${word}: ${probe} was refused — ${r.text}`);
+    assert.equal(r.text, want, `${word}: the declaration after it did not take effect`);
+  }
+});
+
+test('the stop list covers every keyword that starts a declaration', () => {
+  // The list is shared, so it can be walked. Adding a declaration keyword to
+  // the parser without adding it here is the mistake this catches: the parse
+  // would not fail, it would swallow the word.
+  for (const kw of DECL_KEYWORDS) {
+    const bml = createInterpreter({ typecheck: 'off' });
+    bml.loadPrelude();
+    // `open X <kw>` — the name list must stop, leaving the keyword for the
+    // parser proper, which then reports it rather than binding a name called
+    // `val` or `fun`.
+    const r = bml.run(`open List ${kw}`);
+    assert.equal(r.ok, false, `open stopped at ${kw} but the parser then accepted it`);
+    assert.doesNotMatch(String(r.text), /no structure end to open/,
+      `${kw} was taken as a structure name by open`);
+  }
+  for (const kw of BLOCK_ENDERS) {
+    assert.ok(typeof kw === 'string' && kw.length, 'a block ender must be a word');
+  }
 });
