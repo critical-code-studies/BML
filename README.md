@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.6.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.7.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.6.0, a little Standard ML
+BML 0.7.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -155,7 +155,7 @@ with it for the record even though the file itself is gone.
 Not SML '97. The full Basis of 47 structures, `abstype`, sharing constraints and
 functor signatures are years of work no teaching implementation attempts.
 
-Known gaps, kept honest by a register of 10 entries that a test walks: no
+Known gaps, kept honest by a register of 8 entries that a test walks: no
 `abstype`, no `withtype`, no record type as a constructor argument, and nothing
 outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`, `Option`,
 `ListPair`. Identifiers are lower-cased, which Standard ML does not do, so `foo`

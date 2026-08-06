@@ -438,3 +438,22 @@ test('a declaration that binds a type reports no value type', () => {
   assert.deepEqual(smlEcho('exception Fail', 'unit'), ['exception Fail']);
   assert.deepEqual(smlEcho('val x = 1', 'int'), ['val x = 1 : int']);
 });
+
+test('the standard exceptions are catchable by name and still teach', () => {
+  // D-34 and D-35. The messages taught, which is the house style and worth
+  // keeping, but a message is not catchable, so `hd nil handle Empty => 0` had
+  // nothing to match. Both now: `handle` sees an ordinary constructor, and an
+  // uncaught one still prints the sentence that says what went wrong.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('hd nil handle Empty => 0').text, '0');
+  assert.equal(bml.run('tl nil handle Empty => 99').text, '99');
+  assert.equal(bml.run('(1 div 0) handle Div => ~1').text, '~1');
+  // Uncaught, it names the exception AND says why.
+  const loose = bml.run('hd nil');
+  assert.match(loose.text, /uncaught exception Empty/);
+  assert.match(loose.text, /the list is empty/);
+  // A user's own exception still works exactly as before.
+  bml.run('exception Mine');
+  assert.equal(bml.run('(raise Mine) handle Mine => 7').text, '7');
+});

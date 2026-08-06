@@ -19,7 +19,20 @@
 // A host may still override any of these by name; NostOS does not, but the
 // merge order in interp.js lets it.
 
-import { RonmlError } from './errors.js';
+import { RonmlError, RonmlRaise } from './errors.js';
+
+// Raise one of the standard exceptions BY NAME, carrying the sentence that
+// says what went wrong.
+//
+// The messages here teach, which is the house style and worth keeping: "the
+// list is empty. Check with length first." tells a beginner more than `Empty`
+// does. But a message is not catchable, so `hd nil handle Empty => 0` had
+// nothing to match and the house style was costing the language a feature it
+// claimed to have. It answers both now: `handle Empty` sees an ordinary
+// constructor, and an UNCAUGHT one still prints the sentence.
+function raiseStd(name, why) {
+  throw new RonmlRaise({ tag: 'con', name, args: [], why });
+}
 import { describeValue, formatValue, pushOut } from './eval.js';
 
 const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
@@ -55,7 +68,7 @@ export const PRIMITIVES = {
     arity: 1,
     fn: ([l]) => {
       if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`);
-      if (!l.items.length) throw new RonmlError('hd: the list is empty. Check with length first.');
+      if (!l.items.length) raiseStd('Empty', 'hd: the list is empty. Check with length first.');
       return l.items[0];
     },
   },
@@ -63,7 +76,7 @@ export const PRIMITIVES = {
     arity: 1,
     fn: ([l]) => {
       if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`);
-      if (!l.items.length) throw new RonmlError('tl: the list is empty. Check with length first.');
+      if (!l.items.length) raiseStd('Empty', 'tl: the list is empty. Check with length first.');
       return { tag: 'list', items: l.items.slice(1) };
     },
   },

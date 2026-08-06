@@ -291,7 +291,12 @@ export function createInterpreter(opts = {}) {
       return { ok: true, text: combineOutput(out, result, sml) };
     } catch (e) {
       if (e instanceof RonmlRaise) {
-        return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}` };
+        // An uncaught standard exception still says what went wrong. `Empty` on
+        // its own is correct and useless to somebody learning; the sentence is
+        // carried on the value so that catching it costs nothing and NOT
+        // catching it still teaches.
+        const why = e.value && e.value.why ? ` — ${e.value.why}` : '';
+        return { ok: false, text: `ERR: uncaught exception ${formatValue(e.value)}${why}` };
       }
       // A JavaScript stack overflow means one thing here: a program that
       // recursed without ever coming back. The step budget is supposed to catch

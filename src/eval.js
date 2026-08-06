@@ -203,7 +203,7 @@ function applyBinOp(op, l, r) {
       return { tag: 'int', v: ((a % b) + b) % b };
     case 'DIV':
       if (tag !== 'int') throw new RonmlError('div is for whole numbers. For reals use /');
-      if (b === 0) throw new RonmlError('div by zero');
+      if (b === 0) throw new RonmlRaise({ tag: 'con', name: 'Div', args: [], why: 'division by zero' });
       return { tag: 'int', v: Math.floor(a / b) };
     case 'LT': return { tag: 'bool', v: a < b };
     case 'GT': return { tag: 'bool', v: a > b };
