@@ -378,3 +378,63 @@ test('print is Basis and writes a string', () => {
   bml.loadPrelude();
   assert.equal(bml.run('print "hello"').ok, true);
 });
+
+// ---- six more departures closed (v1.300) ------------------------------------
+
+test('open brings a structure\'s names into scope', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('open List');
+  assert.equal(bml.run('map (fn x => x + 1) [1,2]').text, '[2, 3]');
+  assert.equal(bml.run('filter (fn x => x > 1) [1,2,3]').text, '[2, 3]');
+  assert.match(bml.run('open NoSuch').text, /no structure NoSuch/);
+});
+
+test('while is sugar for a recursive function, and the budget still bounds it', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('while false do ()').text, '()');
+  bml.run('val r = ref 0');
+  bml.run('val s = ref 0');
+  bml.run('while !r < 5 do (s := !s + !r; r := !r + 1)');
+  assert.equal(bml.run('!s').text, '10');
+  assert.equal(bml.run('!r').text, '5');
+  // A loop that never ends faults rather than hanging: evalNode counts a step
+  // on entry, so the budget bounds the loop with no extra plumbing.
+  const runaway = createInterpreter({ typecheck: 'off' });
+  assert.equal(runaway.run('while true do ()', { fuel: 500 }).ok, false);
+});
+
+test('a local declaration reports what it bound, not a structure', () => {
+  // D-06. `local` is implemented as an anonymous structure and echoed as one,
+  // so `local val secret = 9 in val vis = secret + 1 end` answered
+  // "structure local : 1 name(s)" and told you nothing about vis.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('local val secret = 9 in val vis = secret + 1 end').text, 'val vis = 10');
+  assert.equal(bml.run('vis').text, '10');
+  assert.equal(bml.run('secret').ok, false, 'and what it hides stays hidden');
+});
+
+test('an and-chain reports every binding it made', () => {
+  // D-08. Both names always bound; only the echo dropped all but the last.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('val a = 1 and b = 2').text, 'val a = 1\nval b = 2');
+  assert.match(bml.run('fun f x = x and g x = x + 1').text, /val f = <fn>\nval g = <fn>/);
+});
+
+test('a projection written out against a value written out has a type', () => {
+  // D-42. The general case needs row polymorphism and still answers a fresh
+  // variable; this is the case anyone writes at a prompt.
+  const bml = createInterpreter({ typecheck: 'report' });
+  assert.equal(bml.typeReport('#1 (1, 2)'), 'int');
+  assert.equal(bml.typeReport('#2 (1, "a")'), 'string');
+  assert.equal(bml.typeReport('#name {name = "x", n = 1}'), 'string');
+  assert.equal(bml.typeReport('#n {name = "x", n = 1}'), 'int');
+});
+
+test('a declaration that binds a type reports no value type', () => {
+  // D-44. `datatype colour = Red | Green : unit` invited the reading that the
+  // declaration IS a unit.
+  assert.deepEqual(smlEcho('datatype t = A | B', 'unit'), ['datatype t = A | B']);
+  assert.deepEqual(smlEcho('exception Fail', 'unit'), ['exception Fail']);
+  assert.deepEqual(smlEcho('val x = 1', 'int'), ['val x = 1 : int']);
+});

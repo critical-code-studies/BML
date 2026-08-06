@@ -330,12 +330,23 @@ export function evalNode(node, env, ctx, builtins) {
       const store = (ctx && ctx.session) || {};
       const inner = Object.create(env);
       for (const d of node.hidden) evalNode(d, inner, { ...ctx, session: inner }, builtins);
+      // D-06: `local … in … end` BINDS, so it should report what it bound.
+      // It was implemented as an anonymous structure and echoed as one:
+      // `structure local : 1 name(s)`, which tells you nothing about `vis`.
       const names = [];
+      const values = [];
       for (const d of node.shown) {
         evalNode(d, inner, { ...ctx, session: inner }, builtins);
-        if (d.name) { store[d.name.toLowerCase()] = inner[d.name.toLowerCase()]; names.push(d.name); }
+        if (d.name) {
+          const v = inner[d.name.toLowerCase()];
+          store[d.name.toLowerCase()] = v;
+          names.push(d.name);
+          values.push(v);
+        }
       }
-      return { tag: 'struct', name: 'local', names };
+      if (names.length === 1) return { tag: 'binding', name: names[0], value: values[0] };
+      if (names.length > 1) return { tag: 'bindings', names, values };
+      return { tag: 'unit' };
     }
 
     case 'FunctorDecl': {
@@ -392,8 +403,14 @@ export function evalNode(node, env, ctx, builtins) {
       // letting them see each other is both necessary and harmless.
       const isFun = node.items.every((d) => d && d.type === 'TopLet' && d.value && d.value.type === 'Lam');
       if (isFun) {
+        const fnames = [];
+        const fvalues = [];
         let last = { tag: 'unit' };
-        for (const d of node.items) last = evalNode(d, env, ctx, builtins);
+        for (const d of node.items) {
+          last = evalNode(d, env, ctx, builtins);
+          if (last && last.tag === 'binding') { fnames.push(last.name); fvalues.push(last.value); }
+        }
+        if (fnames.length > 1) return { tag: 'bindings', names: fnames, values: fvalues };
         return last;
       }
       // Value bindings: work out every right-hand side first, against the
@@ -404,16 +421,71 @@ export function evalNode(node, env, ctx, builtins) {
         }
         return { d, v: null };
       });
+      // D-08: report EVERY binding the chain made, not just the last one. Both
+      // names always bound correctly; only the echo dropped them, so
+      // `val a = 1 and b = 2` answered `val b = 2` and left you wondering about a.
+      const names = [];
+      const values = [];
       let last = { tag: 'unit' };
       for (const { d, v } of staged) {
         if (v !== null && d.type === 'TopLet') {
           env[d.name.toLowerCase()] = v;
+          names.push(d.name);
+          values.push(v);
           last = { tag: 'binding', name: d.name, value: v };
         } else {
           last = evalNode(d, env, ctx, builtins);
         }
       }
+      if (names.length > 1) return { tag: 'bindings', names, values };
       return last;
+    }
+
+    // `open S` copies a structure's published names into scope without their
+    // prefix. The members are stored flat as `s.member`, so this is a scan for
+    // that prefix and a copy — the same shape the structure case writes.
+    // `while c do e` answers unit and is there for its effects: a ref being
+    // assigned, something printed. Bounded by the same step budget as anything
+    // else, so a loop that never ends faults rather than hanging.
+    case 'While': {
+      for (;;) {
+        const c = evalNode(node.cond, env, ctx, builtins);
+        if (!c || c.tag !== 'bool') throw new RonmlError(`${describeValue(c)} is not true or false`);
+        if (!c.v) return { tag: 'unit' };
+        // Each turn evaluates the condition and the body, and evalNode counts a
+        // step on entry, so the budget bounds the loop without extra plumbing:
+        // a while that never ends faults rather than hanging.
+        evalNode(node.body, env, ctx, builtins);
+      }
+    }
+
+    case 'OpenDecl': {
+      const store = (ctx && ctx.session) || {};
+      const opened = [];
+      for (const name of node.names) {
+        const pre = `${name.toLowerCase()}.`;
+        let found = 0;
+        for (let e = store; e && e !== Object.prototype; e = Object.getPrototypeOf(e)) {
+          for (const k of Object.keys(e)) {
+            if (!k.startsWith(pre)) continue;
+            const bare = k.slice(pre.length);
+            if (bare.includes('.')) continue;      // a nested structure stays qualified
+            if (!(bare in env)) { env[bare] = e[k]; found++; }
+          }
+        }
+        // Constructors too: `open` on a structure holding a datatype brings its
+        // constructors, which is most of why anyone opens anything.
+        const cons = store.__cons || {};
+        for (const k of Object.keys(cons)) {
+          if (k.toLowerCase().startsWith(pre)) {
+            cons[k.slice(pre.length)] = cons[k];
+            found++;
+          }
+        }
+        if (!found) throw new RonmlError(`no structure ${name} to open`);
+        opened.push(name);
+      }
+      return { tag: 'struct', name: opened.join(' '), names: [] };
     }
 
     case 'FixityDecl': {

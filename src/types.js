@@ -366,6 +366,22 @@ export function infer(node, env, cons) {
     }
 
     case 'App': {
+      // A PROJECTION applied to something written out. `#1 (1, 2)` is int, and
+      // `#name {name = "x", n = 1}` is string, because both the label and the
+      // shape are right there. The general case needs row polymorphism and
+      // still answers a fresh variable (see 'Select' below); this is the case
+      // anyone actually writes at a prompt, and answering `'a` for it was
+      // needlessly coy.
+      if (node.fn && node.fn.type === 'Select' && node.arg) {
+        if (node.arg.type === 'Tuple' && /^[0-9]+$/.test(node.fn.label)) {
+          const idx = parseInt(node.fn.label, 10) - 1;
+          if (idx >= 0 && idx < node.arg.items.length) return infer(node.arg.items[idx], env, cons);
+        }
+        if (node.arg.type === 'Record') {
+          const f = (node.arg.fields || []).find((x) => x.label === node.fn.label);
+          if (f) return infer(f.value, env, cons);
+        }
+      }
       // A multi-argument constructor may be applied to a TUPLE, `N (a, b, c)`,
       // which is how Standard ML writes it, as well as curried, `N a b c`,
       // which is this build's own spelling. The evaluator learned both in

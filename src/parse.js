@@ -570,7 +570,7 @@ export function parse(toks, fixityIn) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
-    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'andalso', 'orelse', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end',
+    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'andalso', 'orelse', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end', 'do', 'while', 'open',
       'structure', 'signature', 'sig', 'struct', 'exception', 'raise', 'handle', 'type'].includes(tok.v.toLowerCase())) return false;
     return ['NUM', 'STR', 'CHAR', 'NEG', 'IDENT', 'LP', 'LB', 'LC', 'HASH'].includes(tok.t);
   }
@@ -933,6 +933,28 @@ export function parse(toks, fixityIn) {
       if (isKeyword(peek(), 'end')) p++;
       return { type: 'FunctorDecl', name: nameTok.v, param, decls };
     }
+    // `open S` brings a structure's names into scope unqualified. It takes
+    // several at once and later ones win, which is what SML says.
+    // `while c do e`. The Definition gives it as sugar for a recursive
+    // function, and that is exactly how it is built here: no loop construct
+    // reaches the evaluator, so nothing else had to learn about it.
+    if (isKeyword(peek(), 'while')) {
+      p++;
+      const cond = parseExpr();
+      if (!isKeyword(peek(), 'do')) throw new RonmlError("expected 'do' after while's condition");
+      p++;
+      const body = parseExpr();
+      return { type: 'While', cond, body };
+    }
+
+    if (isKeyword(peek(), 'open')) {
+      p++;
+      const names = [];
+      while (peek().t === 'IDENT') names.push(toks[p++].v);
+      if (!names.length) throw new RonmlError('open what? — try: open List');
+      return { type: 'OpenDecl', names };
+    }
+
     if (isKeyword(peek(), 'structure')) {
       p++;
       const nameTok = eat('IDENT');

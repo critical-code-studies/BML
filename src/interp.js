@@ -34,7 +34,14 @@ export function smlEcho(text, ty) {
   // No type to show (the checker is off, or it could not say): print as before.
   if (!ty || ty.startsWith('TYPE:')) return [text];
   const [tyOnly, warn] = ty.split('    WARNING: ');
-  const line = DECLARES.test(text) ? `${text} : ${tyOnly}` : `val it = ${text} : ${tyOnly}`;
+  // A datatype, a signature, a structure or a functor declaration binds a TYPE
+  // or a module, not a value, so Standard ML reports no value type for it.
+  // Printing `datatype colour = Red | Green : unit` invited the reading that
+  // the declaration IS a unit, which it is not.
+  const BINDS_NO_VALUE = /^(datatype|signature|structure|functor|type|exception) /;
+  const line = BINDS_NO_VALUE.test(text) ? text
+    : DECLARES.test(text) ? `${text} : ${tyOnly}`
+    : `val it = ${text} : ${tyOnly}`;
   return warn ? [line, `  WARNING: ${warn}`] : [line];
 }
 
