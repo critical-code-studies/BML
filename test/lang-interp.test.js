@@ -457,3 +457,83 @@ test('the standard exceptions are catchable by name and still teach', () => {
   bml.run('exception Mine');
   assert.equal(bml.run('(raise Mine) handle Mine => 7').text, '7');
 });
+
+// ---- six more departures closed (v1.302) ------------------------------------
+
+test('a record type may be a constructor argument', () => {
+  // D-15. The type skipper knew parentheses and not braces, so `{` ended the
+  // type and the declaration failed on it.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('datatype u = B of {n : int}');
+  assert.equal(bml.run('B {n = 3}').text, 'B {n = 3}');
+});
+
+test('withtype attaches abbreviations to a datatype binding', () => {
+  // D-19. `withtype` was not in the list of words that end a type expression,
+  // so `N of t * t withtype v = int` ate `withtype v` as part of the type.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('datatype t = L | N of t * t withtype v = int');
+  assert.equal(bml.run('N (L, L)').text, 'N (L, L)');
+});
+
+test('any expression may carry a type annotation', () => {
+  // D-20. `(1 : int)` worked because the only place a trailing `:` was read was
+  // after an open paren.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('let val x = 1 in x end : int').text, '1');
+  assert.equal(bml.run('(1 : int)').text, '1');
+});
+
+test('a symbolic identifier is a name and may be bound', () => {
+  // D-21. The fixity table already accepted `infixr 5 ++`, which was the
+  // giveaway: it took names the parser could not bind.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('fun ++ (a, b) = a + b');
+  bml.run('infix 6 ++');
+  assert.equal(bml.run('2 ++ 3').text, '5');
+  // And every operator the language already spells still lexes as itself.
+  assert.equal(bml.run('4 == 4').text, 'true');
+  assert.equal(bml.run('4 != 4').text, 'false');
+  assert.equal(bml.run('4 >= 4').text, 'true');
+  assert.equal(bml.run('1 :: nil').text, '[1]');
+});
+
+test('a functor parameter may be an inline signature', () => {
+  // D-16. A named one already worked.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('functor G (X : sig val n : int end) = struct val d = X.n end');
+  bml.run('structure Ten = struct val n = 10 end');
+  bml.run('structure GG = G (Ten)');
+  assert.equal(bml.run('GG.d').text, '10');
+});
+
+test('abstype declares a type and publishes its with-block', () => {
+  // D-18. The hiding is not enforced — this build tracks names, not types, the
+  // same caveat as a signature — but the form works.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('abstype ab = A with val mk = A end');
+  assert.equal(bml.run('mk').text, 'A');
+  bml.run('abstype t2 = B | C with fun which B = 1 | which C = 2 end');
+  assert.equal(bml.run('which C').text, '2');
+});
+
+test('mutual recursion works inside let, which is where Harper writes it', () => {
+  // D-09. The bindings nested as separate scopes, so the first was closed over
+  // an environment the second was not in yet. They share one frame now. It
+  // needed doing in TWO places: there are two parsers for a multi-binding
+  // `let`, and the top-level one is where a typed line goes.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(
+    bml.run('let fun e n = if n = 0 then true else o2 (n-1) and o2 n = if n = 0 then false else e (n-1) in e 4 end').text,
+    'true');
+  assert.equal(bml.run('let val a = 1 and b = 2 in a + b end').text, '3');
+  assert.equal(bml.run('let fun f x = x + 1 and g y = y * 2 in f (g 5) end').text, '11');
+});
+
+test('the checker still refuses an ill-typed multi-binding let', () => {
+  // LetRec is a new node, and a new node the checker has no case for falls to
+  // the fresh-variable default — which meant strict mode quietly stopped
+  // refusing anything written this way.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  assert.equal(bml.run('let val g = fn x => x ^ "!" in g 1 end').ok, false);
+});

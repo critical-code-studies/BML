@@ -186,6 +186,16 @@ export function parse(toks, fixityIn) {
   // everything below via parseExpr1. A trailing `;` (before `)` or end) is tolerated.
   function parseExpr() {
     let left = parseHandle();
+    // D-20: ANY expression may carry a type annotation, not only one already
+    // inside parentheses. `(1 : int)` and `fn (x : int) => x` both worked and
+    // `let val x = 1 in x end : int` did not, because the only place a trailing
+    // `:` was read was after an open paren. Standard ML puts the annotation at
+    // the loosest level, which is here.
+    if (peek().t === 'COLON') {
+      p++;
+      const ann = parseTypeExpr();
+      left = { type: 'Annot', expr: left, ann, params: 0 };
+    }
     while (peek().t === 'SEMI') {
       p++;
       if (peek().t === 'RP' || peek().t === 'EOF' || peek().t === 'RB') break; // trailing ; is fine
@@ -294,10 +304,15 @@ export function parse(toks, fixityIn) {
       if (extra.length) {
         if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after the bindings");
         p++;
-        let body = parseExpr();
+        const body = parseExpr();
         if (isKeyword(peek(), 'end')) p++;
-        for (let k = extra.length - 1; k >= 0; k--) body = { type: 'Let', name: extra[k].name, value: extra[k].value, body };
-        return { type: 'Let', name: nameTok.v, value, body };
+        // ONE scope for all of them, not a nest of scopes. Nesting made
+        // `let fun e … and o2 … in e 4 end` build Let(e, Let(o2, body)), so e's
+        // body was closed over an environment o2 was not in yet and mutual
+        // recursion inside `let` could not work — which is where Harper writes
+        // most of it. Every name goes into the same frame, so each sees the
+        // others once they are all there.
+        return { type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body };
       }
       if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let k = hack OB_XXXX in crash OB_XXXX k");
       p++;
@@ -752,13 +767,18 @@ export function parse(toks, fixityIn) {
       const t = peek();
       if (t.t === 'EOF') break;
       if (t.t === 'LP') { depth++; p++; continue; }
+      // D-15: a RECORD type, `B of {n : int}`. The skipper knew parentheses and
+      // not braces, so the `{` ended the type and the declaration failed on it.
+      if (t.t === 'LC') { depth++; p++; continue; }
+      if (t.t === 'RC') { if (!depth) break; depth--; p++; continue; }
       if (t.t === 'RP') { if (!depth) break; depth--; p++; continue; }
       if (t.t === 'STAR' && !depth) { parts++; words.push([]); p++; continue; }
       // `->` is ARROWT and belongs to the type; `=>` is ARROW and does NOT —
       // it ends the annotation and starts the body of a `fn`. Consuming ARROW
       // here swallowed the arrow of every `fn x : ty => e`.
       if (t.t === 'STAR' || t.t === 'ARROWT' || t.t === 'COMMA' || t.t === 'CONS') { p++; continue; }
-      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(t.v.toLowerCase())) { keep(t); p++; continue; }
+      if (t.t === 'COLON' && depth) { p++; continue; }   // `{n : int}` inside a record type
+      if (t.t === 'IDENT' && !['val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and', 'withtype'].includes(t.v.toLowerCase())) { keep(t); p++; continue; }
       if (t.t === 'MINUS' && toks[p + 1] && toks[p + 1].t === 'GT') { p += 2; continue; }
       break;
     }
@@ -920,7 +940,26 @@ export function parse(toks, fixityIn) {
       // sugar only has to reach the same place: take K as the parameter.
       if (isKeyword(peek(), 'structure')) p++;
       const param = eat('IDENT').v;
-      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); }
+      // D-16: the parameter's signature may be written OUT rather than named:
+      // `functor G (X : sig val n : int end)`. A named one already worked, so
+      // this only had to accept the other spelling and skip to the matching
+      // `end`. Signatures restrict names here and the parameter's names are
+      // bound bare anyway, so nothing downstream needs the body.
+      if (peek().t === 'COLON' || peek().t === 'ASCRIBE') {
+        p++;
+        if (peek().t === 'IDENT' && peek().v === 'sig') {
+          let depth = 0;
+          for (;;) {
+            const t = peek();
+            if (t.t === 'EOF') break;
+            if (t.t === 'IDENT' && ['sig', 'struct', 'let', 'local'].includes(t.v.toLowerCase())) depth++;
+            else if (isKeyword(t, 'end')) { depth--; p++; if (!depth) break; continue; }
+            p++;
+          }
+        } else {
+          eat('IDENT');
+        }
+      }
       eat('RP');
       if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); skipWhereClauses(); }
       eat('EQ');
@@ -945,6 +984,30 @@ export function parse(toks, fixityIn) {
       p++;
       const body = parseExpr();
       return { type: 'While', cond, body };
+    }
+
+    // `abstype t = A | B with <declarations> end`. Standard ML hides the
+    // representation; this build tracks names and not types, so the same
+    // caveat applies as to a signature: the FORM works and the hiding is not
+    // enforced. Written as a datatype plus the declarations that follow it.
+    if (isKeyword(peek(), 'abstype')) {
+      p++;
+      toks[p - 1] = { ...toks[p - 1], v: 'datatype' };
+      p--;
+      const dt = parseTopOne();
+      const items = [dt];
+      if (isKeyword(peek(), 'with')) {
+        p++;
+        while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') items.push(parseTopOne());
+        if (isKeyword(peek(), 'end')) p++;
+      }
+      // SEQUENTIAL, not simultaneous. `Decls` is also what an `and`-chain
+      // produces, and since v1.299 that evaluates every right-hand side before
+      // binding any name — which is right for `and` and wrong here, where the
+      // with-block must see the datatype the line just declared. Marked, rather
+      // than given its own node type, because everything else about it is the
+      // same list of declarations.
+      return items.length === 1 ? dt : { type: 'Decls', items, sequential: true };
     }
 
     if (isKeyword(peek(), 'open')) {
@@ -1012,6 +1075,15 @@ export function parse(toks, fixityIn) {
         cons.push({ name: c.v, arity, argWords: shape.words || [] });
         if (peek().t !== 'BAR') break;
         p++;
+      }
+      // D-19: `datatype t = … withtype u = …` attaches type abbreviations to a
+      // datatype binding. Abbreviations are names only here (see TypeAbbrev),
+      // so the clause is read and skipped, which is what the abbreviation
+      // amounts to on a build that does not track type structure.
+      while (isKeyword(peek(), 'withtype')) {
+        p++;
+        eat('IDENT');
+        if (peek().t === 'EQ') { p++; skipTypeExpr(); }
       }
       return { type: 'Datatype', name: nameTok.v, cons };
     }
@@ -1084,10 +1156,14 @@ export function parse(toks, fixityIn) {
       }
       if (!inBlock && isKeyword(peek(), 'in')) {
         p++;
-        let body = parseExpr();
+        const body = parseExpr();
         if (isKeyword(peek(), 'end')) p++;
-        for (let k = extra.length - 1; k >= 0; k--) body = { type: 'Let', name: extra[k].name, value: extra[k].value, body };
-        return { type: 'Let', name: nameTok.v, value, body };
+        // ONE scope, as in the inner let parser above. There are TWO paths that
+        // parse a multi-binding `let` — this is the top-level one, which is
+        // where a line typed at a prompt goes — and fixing only the other left
+        // mutual recursion broken exactly where anyone would meet it. Same
+        // shape as the `val rec` fix earlier: one branch done, its sibling not.
+        return { type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body };
       }
       if (extra.length) throw new RonmlError("expected 'in' after the bindings");
       return { type: 'TopLet', name: nameTok.v, value };
@@ -1095,7 +1171,16 @@ export function parse(toks, fixityIn) {
     return parseExpr();
   }
 
-  const expr = parseTop();
+  let expr = parseTop();
+  // A trailing annotation on the whole line. `let val x = 1 in x end : int` is
+  // read at the top by the DECLARATION parser, which returns before parseExpr
+  // ever sees the `:`, so fixing it in parseExpr alone left the form that
+  // anyone would actually type still failing.
+  if (peek().t === 'COLON') {
+    p++;
+    const ann = parseTypeExpr();
+    expr = { type: 'Annot', expr, ann, params: 0 };
+  }
   eat('EOF');
   return expr;
 }

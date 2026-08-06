@@ -18,7 +18,6 @@ const NOT_FITTED = [
   // String/List/Int/Option were here until v1.257 added them. Both pruned by
   // the test below, which is the only thing that has ever kept this honest.
   [/\b(Word|Array|Vector|IO|TextIO|OS|Math|Substring|General)\./, 'that library is not on this machine. ml -full lists what is.'],
-  [/^\s*abstype\b/, 'no abstype on this build.'],
 ];
 
 // The samples the test uses, one per rule above, in the same order.
@@ -26,7 +25,7 @@ const NOT_FITTED = [
 // still genuinely refused. `Char.ord c` left this list at v1.285, when the
 // prelude gained Char and Real; `Array.sub` replaces it as a structure that
 // really is absent.
-export const NOT_FITTED_SAMPLES = ['Array.sub (a, 0)', 'abstype t = A with val z = A end'];
+export const NOT_FITTED_SAMPLES = ['Array.sub (a, 0)'];
 
 export function diagnose(src) {
   for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;

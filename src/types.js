@@ -512,6 +512,24 @@ export function infer(node, env, cons) {
     // A binding is recursive: the name is in scope inside its own value, which
     // is what lets a function call itself. Generalising AFTER the value is
     // inferred is what makes it polymorphic outside.
+    // Several bindings sharing one scope, so each may refer to the others.
+    // Every name goes in as a fresh monotype first (that is what lets the
+    // mutual reference typecheck at all), the values are inferred against that
+    // environment, and only then are they generalised for the body.
+    case 'LetRec': {
+      const inner = { ...env };
+      const vars = [];
+      for (const b of node.binds) {
+        const v = fresh();
+        vars.push(v);
+        inner[b.name.toLowerCase()] = mono(v);
+      }
+      node.binds.forEach((b, i) => unify(vars[i], infer(b.value, inner, cons)));
+      const env2 = { ...env };
+      node.binds.forEach((b, i) => { env2[b.name.toLowerCase()] = generalise(env, vars[i]); });
+      return infer(node.body, env2, cons);
+    }
+
     case 'Let':
     case 'TopLet': {
       const v = fresh();

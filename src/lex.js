@@ -8,6 +8,18 @@
 
 import { RonmlError } from './errors.js';
 
+// The characters Standard ML allows in a symbolic identifier, and the runs of
+// them this language already spells something with. Anything else that is two
+// or more of these is a NAME.
+const SYMBOLIC = /[!%&$#+\-/:<=>?@\\~^|*]/;
+// Read OUT of the lexer below rather than recalled: every two-character
+// operator it spells something with. The first version of this list was
+// Standard ML's and left out this dialect's own `==` and `!=`, so `4 == 4`
+// lexed as a symbolic NAME and twenty tests went red at once.
+const KNOWN_SYMBOLIC = new Set([
+  '::', ':=', ':>', '<=', '<>', '==', '=>', '>=', '|>', '!=', '->', '..', '**',
+]);
+
 // ---- Tokenizer --------------------------------------------------------
 
 // Read a run of characters up to `close`, decoding Standard ML's escapes on the
@@ -63,6 +75,24 @@ export function tokenize(src) {
       }
       i = k;
       continue;
+    }
+    // A SYMBOLIC IDENTIFIER. Standard ML lets a name be made of symbol
+    // characters — `++`, `<+>`, `\\` — and such a name may be bound like any
+    // other. The fixity table already accepted them (`infixr 5 ++` parsed),
+    // which was the giveaway: the table took names the parser could not bind.
+    //
+    // Only runs of TWO OR MORE are considered, and only when the run is not one
+    // of the language's own spellings. Every single-character operator keeps
+    // its existing path untouched, so nothing about `+` or `~` changes.
+    if (SYMBOLIC.test(c)) {
+      let k = i;
+      while (k < n && SYMBOLIC.test(src[k])) k++;
+      const run = src.slice(i, k);
+      if (run.length >= 2 && !KNOWN_SYMBOLIC.has(run)) {
+        toks.push({ t: 'IDENT', v: run });
+        i = k;
+        continue;
+      }
     }
     if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }
     if (c === ':' && src[i + 1] === '>') { toks.push({ t: 'ASCRIBE' }); i += 2; continue; }   // opaque ascription

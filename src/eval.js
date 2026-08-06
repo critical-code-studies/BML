@@ -401,7 +401,8 @@ export function evalNode(node, env, ctx, builtins) {
       // recursion needs each name in scope while the others are defined. They
       // bind functions, and a function's body is not run at definition, so
       // letting them see each other is both necessary and harmless.
-      const isFun = node.items.every((d) => d && d.type === 'TopLet' && d.value && d.value.type === 'Lam');
+      const isFun = node.sequential
+        || node.items.every((d) => d && d.type === 'TopLet' && d.value && d.value.type === 'Lam');
       if (isFun) {
         const fnames = [];
         const fvalues = [];
@@ -616,6 +617,15 @@ export function evalNode(node, env, ctx, builtins) {
       }
       throw new RonmlError(`unbound variable: ${node.name}`);
     }
+    // Several bindings in one `let`, sharing a single scope so they can refer to
+    // one another. See the note in the parser: nesting them meant the first
+    // could not see the second.
+    case 'LetRec': {
+      const env2 = Object.create(env);
+      for (const b of node.binds) env2[b.name.toLowerCase()] = evalNode(b.value, env2, ctx, builtins);
+      return evalNode(node.body, env2, ctx, builtins);
+    }
+
     case 'Let': {
       // RECURSIVE, like SML's `fun`: the scope is created first and the name is
       // bound into it before the value is evaluated, so `let f x = … f … in …`
