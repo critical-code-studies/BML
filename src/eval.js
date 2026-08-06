@@ -381,12 +381,25 @@ export function evalNode(node, env, ctx, builtins) {
       const inner = Object.create(env);
       // The argument's names are visible inside the body both bare and under
       // the parameter's name, so `X.size` and `size` both find it.
-      const prefix = `${String(node.arg || '').toLowerCase()}.`;
-      for (const k of Object.keys(store)) {
-        if (!k.startsWith(prefix)) continue;
-        const bare = k.slice(prefix.length);
-        inner[bare] = store[k];
-        inner[`${f.param.toLowerCase()}.${bare}`] = store[k];
+      if (node.argDecls) {
+        // `F (struct val z = 5 end)` — an ANONYMOUS structure. Run its
+        // declarations into a scratch scope and hand those over, rather than
+        // reading a named structure out of the session.
+        const anon = Object.create(env);
+        for (const d of node.argDecls) evalNode(d, anon, { ...ctx, session: anon }, builtins);
+        for (const k of Object.keys(anon)) {
+          if (k.startsWith('__') || k.includes('.')) continue;
+          inner[k] = anon[k];
+          inner[`${f.param.toLowerCase()}.${k}`] = anon[k];
+        }
+      } else {
+        const prefix = `${String(node.arg || '').toLowerCase()}.`;
+        for (const k of Object.keys(store)) {
+          if (!k.startsWith(prefix)) continue;
+          const bare = k.slice(prefix.length);
+          inner[bare] = store[k];
+          inner[`${f.param.toLowerCase()}.${bare}`] = store[k];
+        }
       }
       for (const d of f.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
       const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;

@@ -160,7 +160,10 @@ export function show(t, names = new Map()) {
     return `{${p.labels.map((l, i) => `${l} : ${show(p.args[i], names)}`).join(', ')}}`;
   }
   if (!p.args.length) return p.name;
-  return `${p.args.map((a) => showArg(a, names)).join(' ')} ${p.name}`;
+  // Standard ML brackets a type constructor's arguments once there is more
+  // than one: `(int, string) pair`, and plain `int box` for a single one.
+  if (p.args.length > 1) return `(${p.args.map((a) => show(a, names)).join(', ')}) ${p.name}`;
+  return `${showArg(p.args[0], names)} ${p.name}`;
 }
 
 function showArg(t, names) {
@@ -247,6 +250,10 @@ function checkExhaustive(subject, arms, cons) {
 
 // The datatype-to-constructors map for the line being inferred. Set by typeOf.
 let CURRENT_DATACONS = {};
+// The functor bodies this session has declared, so an application can infer one
+// again against its actual argument. Filled from the session in typeOf, the
+// same way CURRENT_DATACONS is.
+let CURRENT_FUNCTORS = {};
 // Arity per constructor, so the App case can recognise the tuple form.
 let CURRENT_CONARITY = {};
 
@@ -392,15 +399,25 @@ export function infer(node, env, cons) {
       // still answers a fresh variable (see 'Select' below); this is the case
       // anyone actually writes at a prompt, and answering `'a` for it was
       // needlessly coy.
+      //
+      // v1.305: project from the argument's INFERRED type rather than from how
+      // it was written. The syntactic version only worked when the record or
+      // tuple was spelled out at the call, so `val r = {name = "a", age = 3}`
+      // then `#age r` answered `'a` — the checker knew r was a record and
+      // which field was which, and declined to look. Inferring first covers
+      // both, and the written-out cases fall out of it.
       if (node.fn && node.fn.type === 'Select' && node.arg) {
-        if (node.arg.type === 'Tuple' && /^[0-9]+$/.test(node.fn.label)) {
-          const idx = parseInt(node.fn.label, 10) - 1;
-          if (idx >= 0 && idx < node.arg.items.length) return infer(node.arg.items[idx], env, cons);
+        const at = prune(infer(node.arg, env, cons));
+        if (at.k === 'con' && at.name === 'record' && at.labels) {
+          const i = at.labels.indexOf(node.fn.label);
+          if (i >= 0) return at.args[i];
         }
-        if (node.arg.type === 'Record') {
-          const f = (node.arg.fields || []).find((x) => x.label === node.fn.label);
-          if (f) return infer(f.value, env, cons);
+        if (at.k === 'con' && at.name === '*' && /^[0-9]+$/.test(node.fn.label)) {
+          const i = parseInt(node.fn.label, 10) - 1;
+          if (i >= 0 && i < at.args.length) return at.args[i];
         }
+        // Anything else needs row polymorphism and stays honestly unknown.
+        return fresh();
       }
       // A multi-argument constructor may be applied to a TUPLE, `N (a, b, c)`,
       // which is how Standard ML writes it, as well as curried, `N a b c`,
@@ -507,6 +524,16 @@ export function infer(node, env, cons) {
 
     case 'Select': return fresh();     // needs row polymorphism; honestly unknown
 
+    case 'While': {
+      // `while c do e` is `bool`, then `unit`, and answers `unit`. There was no
+      // case for it at all, so it took the fresh-variable default and reported
+      // `'a` — which reads as *this could be anything* for a form that is
+      // always exactly one thing.
+      unify(infer(node.cond, env, cons), BOOL);
+      infer(node.body, env, cons);
+      return UNIT;
+    }
+
     case 'Seq': {
       infer(node.left, env, cons);
       return infer(node.right, env, cons);
@@ -603,6 +630,60 @@ export function infer(node, env, cons) {
     // each turned out to be is left on the node for `remember` to publish,
     // because `remember` is where the session learns anything and inference is
     // not supposed to write to it.
+    // `structure T = F (A)`. Infer the FUNCTOR'S BODY again, with the
+    // argument's members bound under the parameter's name, and publish what
+    // comes out as T's members. Without this there was no case at all and the
+    // application took the fresh-variable default, so `T.m` reported `'a`
+    // however plain its type — and since a qualified name keeps the unbound
+    // fallback (v1.304), nothing said so.
+    //
+    // Re-inferring rather than copying the functor's own member types is what
+    // makes it right: `val m = X.z + 1` is `int` because THIS argument's `z`
+    // is an int, and a different argument could make it something else. That
+    // is what a functor is for.
+    case 'StructApply': {
+      const f = CURRENT_FUNCTORS[node.functor];
+      if (!f) return UNIT;
+      const inner = { ...env };
+      const bind = (bare, sch) => {
+        inner[bare] = sch;
+        inner[`${f.param.toLowerCase()}.${bare}`] = sch;
+      };
+      if (node.argDecls) {
+        // An anonymous structure: type its declarations here and hand those on.
+        for (const d of node.argDecls) {
+          if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* not this module's */ } continue; }
+          try {
+            const v = fresh();
+            const rec = { ...inner, [d.name.toLowerCase()]: mono(v) };
+            const t = infer(d.value, rec, cons);
+            unify(v, t);
+            bind(d.name.toLowerCase(), isSyntacticValue(d.value) ? generalise(env, t) : mono(t));
+          } catch { /* one member that will not type does not stop the rest */ }
+        }
+      } else {
+        const prefix = `${String(node.arg || '').toLowerCase()}.`;
+        for (const k of Object.keys(env)) {
+          if (k.startsWith(prefix)) bind(k.slice(prefix.length), env[k]);
+        }
+      }
+      const members = {};
+      for (const d of f.decls || []) {
+        if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* as above */ } continue; }
+        try {
+          const v = fresh();
+          const rec = { ...inner, [d.name.toLowerCase()]: mono(v) };
+          const t = infer(d.value, rec, cons);
+          unify(v, t);
+          const sch = isSyntacticValue(d.value) ? generalise(env, t) : mono(t);
+          inner[d.name.toLowerCase()] = sch;
+          members[d.name.toLowerCase()] = sch;
+        } catch { /* as above */ }
+      }
+      node.__members = members;
+      return UNIT;
+    }
+
     case 'StructDecl': case 'FunctorDecl': {
       const inner = { ...env };
       const members = {};
@@ -651,11 +732,32 @@ export function fromAnnotation(a, vars) {
       if (!vars.has(a.name)) vars.set(a.name, fresh());
       return vars.get(a.name);
     }
-    return ANNOT[a.name.toLowerCase()] || fresh();
+    // A DATATYPE this session has declared is the type it says it is, so
+    // `val x : colour = 5` is a clash. Anything else stays a variable: a type
+    // ABBREVIATION (`type count = int`) is not tracked, and making it rigid
+    // would refuse `val n : count = 5` for saying `count` where the checker
+    // worked out `int`.
+    const nm = a.name.toLowerCase();
+    if (ANNOT[nm]) return ANNOT[nm];
+    if (CURRENT_DATACONS && CURRENT_DATACONS[nm]) return con(nm);
+    return fresh();
   }
   if (a.t === 'app') {
+    const nm = a.name.toLowerCase();
+    // `(int, string) pair` — more than one argument.
+    if (a.args) {
+      const args = a.args.map((x) => fromAnnotation(x, vars));
+      return (CURRENT_DATACONS && CURRENT_DATACONS[nm]) ? con(nm, args) : fresh();
+    }
     const inner = fromAnnotation(a.arg, vars);
-    return a.name.toLowerCase() === 'list' ? listOf(inner) : fresh();
+    if (nm === 'list') return listOf(inner);
+    // `int box`, once `datatype 'a box` has been declared. Same line as above:
+    // known datatype, real type; anything else (an abbreviation such as
+    // `type 'a syn = 'a list`, or a type from a structure this module did not
+    // walk) keeps the variable, because a wrong rigid type refuses correct
+    // programs and a variable only under-reports.
+    if (CURRENT_DATACONS && CURRENT_DATACONS[nm]) return con(nm, [inner]);
+    return fresh();
   }
   if (a.t === 'tuple') return tupleOf(a.parts.map((x) => fromAnnotation(x, vars)));
   if (a.t === 'fn') return fnOf(fromAnnotation(a.from, vars), fromAnnotation(a.to, vars));
@@ -687,6 +789,7 @@ export function typeOf(ast, session = {}) {
   for (const k of Object.keys(reg)) env[k] = reg[k];
   for (const k of Object.keys(session.__contypes || {})) cons[k] = session.__contypes[k];
   CURRENT_DATACONS = session.__datacons || {};
+  CURRENT_FUNCTORS = session.__functors || {};
   CURRENT_CONARITY = session.__conarity || {};
   try {
     const t = infer(ast, env, cons);
@@ -705,17 +808,30 @@ export function typeOf(ast, session = {}) {
 // being declared (so `Node of tree * int * tree` knows what a tree is). Anything
 // else is a fresh variable, which is no worse than before this existed.
 const BASE_TYPES = { int: () => INT, real: () => REAL, string: () => STR, str: () => STR, bool: () => BOOL, char: () => CHAR, unit: () => UNIT };
-function typeOfWords(ws, selfType, selfName) {
+function typeOfWords(ws, selfType, selfName, tyvars) {
   if (!ws || !ws.length) return fresh();
   const last = ws[ws.length - 1];
   const head = ws[0];
   const baseOf = (w) => {
     if (BASE_TYPES[w]) return BASE_TYPES[w]();
     if (selfName && w === selfName) return selfType;
+    // A TYPE PARAMETER of the declaration being read. It must resolve to the
+    // variable the head already made for it, not to a fresh one: `Box of 'a`
+    // has to be `'a -> 'a box` with the SAME variable at both ends, or `Box 1`
+    // reports `'b box` and the parameter tells you nothing (D-56).
+    if (tyvars && Object.prototype.hasOwnProperty.call(tyvars, w)) return tyvars[w];
     return null;
   };
   if (ws.length === 1) return baseOf(head) || fresh();
   if (last === 'list') { const b = baseOf(head); return b ? listOf(b) : fresh(); }
+  // `'a tree` — a parameterised type applied to an argument, which is how a
+  // recursive datatype names itself: `Node of 'a tree * 'a * 'a tree`. The
+  // words arrive head-first, so the last is the constructor and the rest are
+  // its arguments.
+  if (selfName && last === selfName && ws.length > 1) {
+    const args = ws.slice(0, -1).map((w) => baseOf(w) || fresh());
+    return con(selfName, args);
+  }
   return baseOf(last) || baseOf(head) || fresh();
 }
 
@@ -728,7 +844,7 @@ export function remember(ast, session, t) {
     session.__types[ast.name.toLowerCase()] = isSyntacticValue(ast.value)
       ? generalise({}, t)
       : mono(t);
-  } else if (ast.type === 'StructDecl' && ast.__members) {
+  } else if ((ast.type === 'StructDecl' || ast.type === 'StructApply') && ast.__members) {
     // Published as flat qualified keys, `list.map`, because that is exactly how
     // the evaluator publishes them and how the parser hands the name over:
     // `List.map` is ONE Var node whose name contains a dot, not a selection.
@@ -736,7 +852,14 @@ export function remember(ast, session, t) {
       session.__types[`${ast.name.toLowerCase()}.${k}`] = ast.__members[k];
     }
   } else if (ast.type === 'Datatype') {
-    const self = con(ast.name);
+    // ONE VARIABLE PER TYPE PARAMETER, made here and shared by every mention of
+    // that parameter in every constructor. `datatype 'a box = Box of 'a` is
+    // `Box : 'a -> 'a box`, one variable; the whole point of the parameter is
+    // that the two ends are the same. `generalise` below then quantifies it,
+    // so each USE of Box gets its own instance.
+    const tyvars = {};
+    for (const v of ast.params || []) tyvars[v] = fresh();
+    const self = con(ast.name, (ast.params || []).map((v) => tyvars[v]));
     if (!session.__datacons) session.__datacons = {};
     // Which constructors make up this type, in declared order. The exhaustiveness
     // check needs the whole set, and nothing else records it.
@@ -749,7 +872,7 @@ export function remember(ast, session, t) {
       // anything this module has no opinion about stays a fresh variable,
       // which is what every argument used to be.
       const words = c.argWords || [];
-      for (let i = c.arity - 1; i >= 0; i--) ty = fnOf(typeOfWords(words[i], self, ast.name), ty);
+      for (let i = c.arity - 1; i >= 0; i--) ty = fnOf(typeOfWords(words[i], self, ast.name, tyvars), ty);
       session.__contypes[c.name] = generalise({}, ty);
       if (!session.__conarity) session.__conarity = {};
       session.__conarity[c.name] = c.arity;

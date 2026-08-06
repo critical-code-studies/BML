@@ -686,3 +686,152 @@ test('the stop list covers every keyword that starts a declaration', () => {
     assert.ok(typeof kw === 'string' && kw.length, 'a block ender must be a word');
   }
 });
+
+// ---- a datatype's type parameters (v1.305) ----------------------------------
+
+test('a datatype carries its type parameters', () => {
+  // D-56. The parser read the head parameters and threw them away, over a
+  // comment saying they carried no meaning because nothing here was typed —
+  // true when written, false once the checker landed. Without them the checker
+  // builds a type constructor of NO arguments, so every value of the type
+  // prints as the bare name.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  bml.run("datatype 'a box = Box of 'a");
+  assert.equal(bml.typeReport('Box 1'), 'int box');
+  assert.equal(bml.typeReport('Box "s"'), 'string box');
+  // option is declared in the prelude like any other datatype, which is why
+  // this showed on every REPL line involving one.
+  assert.equal(bml.typeReport('SOME 1'), 'int option');
+  assert.equal(bml.typeReport('NONE'), "'a option");
+  assert.equal(bml.typeReport('SOME (SOME 1)'), 'int option option');
+  assert.equal(bml.typeReport('valOf (SOME 3)'), 'int', 'and it reaches through the Basis');
+  assert.equal(bml.typeReport('valOf'), "'a option -> 'a");
+  assert.equal(bml.typeReport('Option.map'), "('a -> 'b) -> 'a option -> 'b option");
+});
+
+test('a parameter is ONE variable, at both ends', () => {
+  // The identity is the whole point. Give the payload its own fresh variable
+  // and `Box of 'a` types as `'b -> 'a box`, which reports worse than saying
+  // nothing: `un` would be `'a box -> 'b` and tell you the wrong thing.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run("datatype 'a box = Box of 'a");
+  bml.run('fun un (Box x) = x');
+  assert.equal(bml.typeReport('un'), "'a box -> 'a", 'one variable, not two');
+  assert.equal(bml.typeReport('un (Box 1)'), 'int');
+});
+
+test('a recursive parameterised datatype names itself correctly', () => {
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run("datatype 'a tree = Leaf | Node of 'a tree * 'a * 'a tree");
+  assert.equal(bml.typeReport('Leaf'), "'a tree");
+  assert.equal(bml.typeReport('Node (Leaf, 1, Leaf)'), 'int tree');
+});
+
+test('more than one parameter is bracketed, as Standard ML writes it', () => {
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run("datatype ('a,'b) pair = P of 'a * 'b");
+  assert.equal(bml.typeReport('P (1, "a")'), '(int, string) pair');
+  // And it can now be WRITTEN, which it could not: the annotation parser read
+  // one type inside the brackets and made the comma a parse error, so the form
+  // `datatype` declared happily was one nothing could annotate.
+  assert.equal(bml.run('val q : (int, string) pair = P (1, "a")').ok, true);
+});
+
+test('the parameters make real clashes catchable', () => {
+  // The point of carrying them: a type constructor with no arguments has
+  // nothing to disagree about, so every one of these used to be accepted.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run("datatype 'a box = Box of 'a");
+  bml.run('datatype colour = Red | Green');
+  for (const bad of ['Box 1 = Box "s"', 'SOME 1 = SOME "x"', 'val z : int box = Box "s"', 'val c : colour = 5']) {
+    assert.equal(bml.run(bad).ok, false, `${bad} should be refused`);
+  }
+  for (const good of ['Box 1 = Box 1', 'SOME 1 = SOME 2', 'val z : int box = Box 1', 'val c : colour = Red']) {
+    assert.equal(bml.run(good).ok, true, `${good} should run: ${bml.run(good).text}`);
+  }
+});
+
+test('a type ABBREVIATION stays permissive, deliberately', () => {
+  // `type 'a syn = 'a list` is not tracked, so `int syn` cannot be resolved to
+  // `int list`. Making it rigid anyway would refuse a correct program for
+  // saying `syn` where the checker worked out `list`. A variable under-reports;
+  // a wrong rigid type refuses. Only names known to be datatypes go rigid.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.run("type 'a syn = 'a list");
+  bml.run('type count = int');
+  assert.equal(bml.run('val c : int syn = [1, 2]').ok, true);
+  assert.equal(bml.run('val d : count = 5').ok, true);
+});
+
+// ---- functors: applied, typed, and taking an anonymous argument (v1.305) ----
+
+test('an anonymous structure can be a functor argument', () => {
+  // `F (struct val z = 5 end)` is Standard ML and was a parse error: the
+  // argument had to be a name declared on an earlier line.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  bml.run('signature SG = sig val z : int end');
+  bml.run('functor F (X : SG) = struct val m = X.z + 1 fun g y = y * X.z end');
+  assert.equal(bml.run('structure U = F (struct val z = 5 end)').ok, true);
+  assert.equal(bml.run('U.m').text, '6');
+  assert.equal(bml.run('U.g 2').text, '10');
+  // and the named form still works
+  bml.run('structure A = struct val z = 9 end');
+  bml.run('structure T = F (A)');
+  assert.equal(bml.run('T.m').text, '10');
+});
+
+test('a functor application is typed, by inferring the body again', () => {
+  // There was no checker case for `structure T = F (A)` at all, so it took the
+  // fresh-variable default and every member of the result reported `'a`. And
+  // because a qualified name keeps the unbound fallback, nothing said so.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  bml.run('signature SG = sig val z : int end');
+  bml.run('functor F (X : SG) = struct val m = X.z + 1 fun g y = y * X.z end');
+  bml.run('structure A = struct val z = 9 end');
+  bml.run('structure T = F (A)');
+  assert.equal(bml.typeReport('T.m'), 'int');
+  assert.equal(bml.typeReport('T.g'), 'int -> int');
+});
+
+test('the result type follows the argument, which is what a functor is for', () => {
+  // Copying the functor's own member types would answer the same thing every
+  // time. Inferring the body against THIS argument is what makes the answer
+  // depend on what was passed in.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  bml.run('signature ITEM = sig val one : int end');
+  bml.run('functor Wrap (X : ITEM) = struct val w = [X.one] end');
+  bml.run('structure Wi = Wrap (struct val one = 3 end)');
+  bml.run('structure Ws = Wrap (struct val one = "s" end)');
+  assert.equal(bml.typeReport('Wi.w'), 'int list');
+  assert.equal(bml.typeReport('Ws.w'), 'string list', 'same functor, a different argument type');
+});
+
+test('a record projection reads the type of what it is applied to', () => {
+  // It used to check the argument's SYNTAX, so it only worked when the record
+  // was spelled out at the call: `#age {name = "a", age = 3}` was int and
+  // `val r = {…}` then `#age r` was `'a`. The checker knew r's type and which
+  // field was which, and declined to look.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run('val r = {name = "a", age = 3}');
+  bml.run('val p = (1, "x")');
+  assert.equal(bml.typeReport('#age r'), 'int');
+  assert.equal(bml.typeReport('#name r'), 'string');
+  assert.equal(bml.typeReport('#1 p'), 'int');
+  assert.equal(bml.typeReport('#2 p'), 'string');
+  assert.equal(bml.typeReport('#age {name = "b", age = 9}'), 'int', 'the written-out case still works');
+});
+
+test('while … do is unit, not a fresh variable', () => {
+  // No case for it in the checker at all, so it took the default and reported
+  // `'a` — reading as "this could be anything" for a form that is always one
+  // thing.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.run('val i = ref 0');
+  assert.equal(bml.typeReport('while false do ()'), 'unit');
+  assert.equal(bml.typeReport('while !i < 3 do i := !i + 1'), 'unit');
+});

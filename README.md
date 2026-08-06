@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.10.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.11.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.10.0, a little Standard ML
+BML 0.11.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -164,10 +164,10 @@ The gaps are catalogued rather than described, in a register that a test walks
 so that fixing one turns the test red and names the entry to delete. About 18%
 of Harper's corpus still does not run as written.
 
-A datatype declared with a type parameter does not carry it: `SOME 1` reports
-`option` where Standard ML says `int option`, and the same goes for any
-`datatype 'a t` you declare. `list` is the exception, and only because it is
-special-cased. The values are right; the types under-report.
+A type ABBREVIATION is not resolved: `type 'a syn = 'a list` then
+`val c : int syn = [1, 2]` is accepted rather than checked, because the checker
+has no record of what `syn` abbreviates. Deliberately permissive — a wrong
+rigid type refuses correct programs, where a variable only under-reports.
 
 Nothing in the Basis outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`,
 `Option`, `ListPair`. Identifiers are lower-cased, which Standard ML does not

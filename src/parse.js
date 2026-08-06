@@ -737,17 +737,26 @@ export function parse(toks, fixityIn) {
     const parseAtomT = () => {
       if (peek().t === 'LP') {
         p++;
-        const inner = parseTypeExpr();
+        // `(int, string) pair` — a type constructor of MORE THAN ONE argument.
+        // Only one was read here, so the comma was a parse error and the form
+        // could not be written at all, though `datatype ('a,'b) pair` declared
+        // it happily. Declared and unwritable.
+        const parts = [parseTypeExpr()];
+        while (peek().t === 'COMMA') { p++; parts.push(parseTypeExpr()); }
         eat('RP');
-        return inner;
+        return parts.length === 1 ? parts[0] : { t: 'args', parts };
       }
       const id = eat('IDENT');
       return { t: 'name', name: id.v };
     };
     let left = parseAtomT();
-    // postfix: `int list`, `'a tree`
-    while (peek().t === 'IDENT' && !['of', 'val', 'fun', 'type', 'datatype', 'end', 'exception', 'structure', 'signature', 'in', 'and'].includes(peek().v.toLowerCase())) {
-      left = { t: 'app', name: eat('IDENT').v, arg: left };
+    // postfix: `int list`, `'a tree`, `(int, string) pair`
+    // The stop list is the shared one — `of` besides, which ends a
+    // constructor's payload. Written out by hand here until v1.305, missing
+    // six words, exactly as the other three sites were.
+    while (peek().t === 'IDENT' && !isStop(peek()) && peek().v.toLowerCase() !== 'of') {
+      const nm = eat('IDENT').v;
+      left = left && left.t === 'args' ? { t: 'app', name: nm, args: left.parts } : { t: 'app', name: nm, arg: left };
     }
     if (peek().t === 'STAR') {
       const parts = [left];
@@ -1066,6 +1075,20 @@ export function parse(toks, fixityIn) {
           // names the argument by declaration rather than passing a structure.
           // The name on the right is the structure being handed over.
           if (isKeyword(peek(), 'structure')) { p++; eat('IDENT'); eat('EQ'); }
+          // `F (struct val z = 5 end)` — an ANONYMOUS structure as the
+          // argument, which Standard ML allows and which was a parse error
+          // here: the argument had to be a name declared on an earlier line.
+          // Read as the declarations it holds, and handed over as those.
+          if (isKeyword(peek(), 'struct')) {
+            p++;
+            const inlineDecls = [];
+            inBlock++;
+            while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') inlineDecls.push(parseTop());
+            inBlock--;
+            if (isKeyword(peek(), 'end')) p++;
+            eat('RP');
+            return { type: 'StructApply', name: nameTok.v, functor: fn, arg: null, argDecls: inlineDecls, ascribe };
+          }
           arg = eat('IDENT').v;
           eat('RP');
         }
@@ -1083,11 +1106,24 @@ export function parse(toks, fixityIn) {
     }
     if (isKeyword(peek(), 'datatype')) {
       p++;
-      // `datatype 'a option = …` — type parameters are read and thrown away.
-      // Nothing here is typed, so they carry no meaning, but a declaration
-      // copied out of a manual should still declare its constructors.
-      while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
-      if (peek().t === 'LP') { while (peek().t !== 'RP') p++; p++; }
+      // `datatype 'a option = …`. The parameters used to be read and thrown
+      // away, over a comment saying they carried no meaning because nothing
+      // here was typed. That was true when it was written and stopped being
+      // true when the checker landed: without them the checker builds a type
+      // constructor of NO arguments, so `SOME 1` reports `option` where
+      // Standard ML says `int option` (D-56).
+      //
+      // Both spellings: `'a box` and `('a, 'b) pair`.
+      const params = [];
+      while (peek().t === 'IDENT' && /^'/.test(peek().v)) params.push(toks[p++].v);
+      if (peek().t === 'LP') {
+        p++;
+        while (peek().t !== 'RP' && peek().t !== 'EOF') {
+          if (peek().t === 'IDENT' && /^'/.test(peek().v)) params.push(peek().v);
+          p++;
+        }
+        if (peek().t === 'RP') p++;
+      }
       const nameTok = eat('IDENT');
       eat('EQ');
       const cons = [];
@@ -1117,7 +1153,7 @@ export function parse(toks, fixityIn) {
         eat('IDENT');
         if (peek().t === 'EQ') { p++; skipTypeExpr(); }
       }
-      return { type: 'Datatype', name: nameTok.v, cons };
+      return { type: 'Datatype', name: nameTok.v, params, cons };
     }
     if (isKeyword(peek(), 'let')) {
       p++;
