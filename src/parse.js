@@ -231,6 +231,14 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'let')) {
       p++;
       if (peek().t === 'IDENT' && ['val', 'fun'].includes(peek().v.toLowerCase())) p++;
+      // `val rec f = fn …` is how Standard ML writes a recursive VALUE binding,
+      // and Harper uses it. `rec` was read as the name being bound, so a
+      // variable called rec was created and `f` never bound at all: `f 5`
+      // afterwards was an unknown name, and nothing said so. Every binding here
+      // is already recursive (see the Let case in eval.js, which puts the name
+      // in scope before evaluating the value), so the word is consumed and the
+      // behaviour is what it asks for.
+      if (peek().t === 'IDENT' && peek().v.toLowerCase() === 'rec') p++;
       // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
@@ -849,7 +857,18 @@ export function parse(toks, fixityIn) {
       // `where type … = …`. Since this build tracks names and not types, the
       // refinement is a no-op and the new signature simply inherits the named
       // one's public names. `views.sml` is built entirely this way.
-      if (!isKeyword(peek(), 'sig')) {
+      // CASE MATTERS for the keyword here, and only here it has ever mattered
+      // enough to break something. `isKeyword` lowercases, so a signature NAMED
+      // `SIG` — which is what half of Harper's files call theirs — looked like
+      // the keyword `sig`, and `signature ABBR = SIG` parsed as an empty
+      // `sig … end` block. The abbreviation inherited no names, so ascribing to
+      // it hid everything, which is what D-05 was.
+      //
+      // Standard ML is case-sensitive throughout and this build is not; that is
+      // a departure of its own, recorded in the README. Fixing it everywhere is
+      // a bigger change than this one and wants its own day. Here the keyword is
+      // matched exactly, which is enough.
+      if (!(peek().t === 'IDENT' && peek().v === 'sig')) {
         const refTok = eat('IDENT');
         skipWhereClauses();
         return { type: 'SigAbbrev', name: nameTok.v, from: refTok.v };
@@ -977,6 +996,11 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'let')) {
       p++;
       if (peek().t === 'IDENT' && ['val', 'fun'].includes(peek().v.toLowerCase())) p++;
+      // `val rec f = fn …`, Standard ML's recursive value binding. See the
+      // same skip in the `let` case above: this is the TOP-LEVEL one, and
+      // fixing only that one left `val rec` still binding a variable called
+      // rec at the prompt, which is where anyone would type it.
+      if (peek().t === 'IDENT' && peek().v.toLowerCase() === 'rec') p++;
       // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:

@@ -48,9 +48,20 @@ export function tokenize(src) {
   while (i < n) {
     const c = src[i];
     if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+    // COMMENTS NEST, which the Definition says in §2.3 and this did not do: it
+    // took the first `*)` it found, so `(* outer (* inner *) still outer *)`
+    // ended at the inner one and left `still outer *)` to be lexed as code. The
+    // conformance harness has counted depth correctly since v1.274; the
+    // tokenizer the harness measures never did.
     if (c === '(' && src[i + 1] === '*') {
-      const end = src.indexOf('*)', i + 2);
-      i = end < 0 ? n : end + 2;
+      let depth = 1;
+      let k = i + 2;
+      while (k < n && depth > 0) {
+        if (src[k] === '(' && src[k + 1] === '*') { depth++; k += 2; continue; }
+        if (src[k] === '*' && src[k + 1] === ')') { depth--; k += 2; continue; }
+        k++;
+      }
+      i = k;
       continue;
     }
     if (c === ':' && src[i + 1] === ':') { toks.push({ t: 'CONS' }); i += 2; continue; }
@@ -117,6 +128,14 @@ export function tokenize(src) {
       continue;
     }
     if (/[0-9]/.test(c)) {
+      // Hexadecimal, which Standard ML writes 0x1F.
+      if (src[i] === '0' && (src[i + 1] === 'x' || src[i + 1] === 'X') && /[0-9a-fA-F]/.test(src[i + 2] || '')) {
+        let h = i + 2;
+        while (h < n && /[0-9a-fA-F]/.test(src[h])) h++;
+        toks.push({ t: 'NUM', v: parseInt(src.slice(i + 2, h), 16), real: false });
+        i = h;
+        continue;
+      }
       let j = i + 1;
       while (j < n && /[0-9]/.test(src[j])) j++;
       // A decimal point makes it a real, and only if a digit follows: `1.5` is
@@ -127,12 +146,33 @@ export function tokenize(src) {
         j++;
         while (j < n && /[0-9]/.test(src[j])) j++;
       }
+      // Scientific notation: 1e3, 1.5e~2. SML writes a negative exponent with a
+      // tilde like every other negative number, so both spellings are taken.
+      if ((src[j] === 'e' || src[j] === 'E')
+          && /[0-9~-]/.test(src[j + 1] || '')
+          && /[0-9]/.test(src[j + 1] === '~' || src[j + 1] === '-' ? (src[j + 2] || '') : src[j + 1])) {
+        real = true;
+        let k = j + 1;
+        if (src[k] === '~' || src[k] === '-') k++;
+        while (k < n && /[0-9]/.test(src[k])) k++;
+        const mantissa = src.slice(i, j);
+        const exp = src.slice(j + 1, k).replace('~', '-');
+        toks.push({ t: 'NUM', v: parseFloat(mantissa) * Math.pow(10, parseInt(exp, 10)), real: true });
+        i = k;
+        continue;
+      }
       toks.push({ t: 'NUM', v: parseFloat(src.slice(i, j)), real });
       i = j;
       continue;
     }
     // `~` is SML's unary minus. It was missing because it was never lexed.
-    if (c === '~' && /[0-9(]/.test(src[i + 1] || '')) { toks.push({ t: 'NEG' }); i++; continue; }
+    // `~` is SML's unary minus, and whitespace is allowed between it and what it
+    // negates: `~ 3` is minus three. Only the tight form was lexed.
+    if (c === '~') {
+      let k = i + 1;
+      while (k < n && /\s/.test(src[k])) k++;
+      if (/[0-9(a-zA-Z]/.test(src[k] || '')) { toks.push({ t: 'NEG' }); i = k; continue; }
+    }
     if (/[A-Za-z_]/.test(c) || (c === "'" && /[A-Za-z]/.test(src[i + 1] || ''))) {
       let j = i + 1;
       // `.` is allowed inside an identifier so filenames lex as one token

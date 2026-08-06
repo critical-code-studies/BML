@@ -27,6 +27,8 @@ export const PRELUDE = [
   'fun before (a, b) = a',
   'infix 0 before',
   'fun ignore _ = ()',
+  '(* print is Basis: it writes a string out and answers unit. *)',
+  'fun print s = echo s',
   '',
   'structure List = struct',
   '  fun null nil = true | null _ = false',

@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.4.1** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.5.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.4.1, a little Standard ML
+BML 0.5.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -155,8 +155,8 @@ with it for the record even though the file itself is gone.
 Not SML '97. The full Basis of 47 structures, `abstype`, sharing constraints and
 functor signatures are years of work no teaching implementation attempts.
 
-Known gaps, kept honest by a test that walks them: no `abstype`, no `open`, and
-nothing outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`, `Option`,
+Known gaps, kept honest by a register of 16 entries that a test walks: no
+`abstype`, no `open`, no `while`, no `withtype`, and nothing outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`, `Option`,
 `ListPair`. Identifiers are lower-cased, which Standard ML does not do, so `foo`
 and `Foo` name the same value. Recursion depth is the host's rather than the
 interpreter's, so a deep non-tail recursion can exhaust the JavaScript stack

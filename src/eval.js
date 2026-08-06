@@ -50,6 +50,14 @@ export function pushOut(text) { if (OUT) OUT.push(text); }
 let HOST_NAME_HINT = null;
 export function setHostNameHint(fn) { HOST_NAME_HINT = fn; }
 
+// What the HOST makes of a name nothing has bound. Standard ML makes it an
+// error, and that is what happens when no host answers. NostOS answers with an
+// atom, because its consoles pass bare words around as values: `hack OB_1A2B`
+// names a tower, `copy factory_id.ml ob` names a file, and neither was ever
+// declared. Returning nothing here means the language refuses.
+let HOST_UNBOUND = null;
+export function setHostUnbound(fn) { HOST_UNBOUND = fn; }
+
 // ---- Evaluator -----------------------------------------------------------
 
 export function applyValue(fnVal, argVal) {
@@ -368,8 +376,43 @@ export function evalNode(node, env, ctx, builtins) {
     // environment, which is what makes `fun ev … and od …` mutually recursive:
     // both land in the session before either is called.
     case 'Decls': {
+      // `and` is SIMULTANEOUS. Every right-hand side sees the bindings that
+      // were in scope BEFORE the declaration, which is the whole difference
+      // between `val a = 1 and b = a` and two declarations in a row. v1.278
+      // built the chain by running the parts in sequence, so each right-hand
+      // side saw the ones before it and `val u = 2 and w = u` gave w the new u.
+      //
+      // Every case in the corpus is independent or mutually recursive
+      // definitions, where the two readings agree, which is why the conformance
+      // number never noticed. Shadowing is where they part.
+      //
+      // `fun` chains are the exception and must NOT be held back: mutual
+      // recursion needs each name in scope while the others are defined. They
+      // bind functions, and a function's body is not run at definition, so
+      // letting them see each other is both necessary and harmless.
+      const isFun = node.items.every((d) => d && d.type === 'TopLet' && d.value && d.value.type === 'Lam');
+      if (isFun) {
+        let last = { tag: 'unit' };
+        for (const d of node.items) last = evalNode(d, env, ctx, builtins);
+        return last;
+      }
+      // Value bindings: work out every right-hand side first, against the
+      // environment as it stands, and only then put the names in.
+      const staged = node.items.map((d) => {
+        if (d && d.type === 'TopLet') {
+          return { d, v: evalNode(d.value, env, ctx, builtins) };
+        }
+        return { d, v: null };
+      });
       let last = { tag: 'unit' };
-      for (const d of node.items) last = evalNode(d, env, ctx, builtins);
+      for (const { d, v } of staged) {
+        if (v !== null && d.type === 'TopLet') {
+          env[d.name.toLowerCase()] = v;
+          last = { tag: 'binding', name: d.name, value: v };
+        } else {
+          last = evalNode(d, env, ctx, builtins);
+        }
+      }
       return last;
     }
 
@@ -482,10 +525,24 @@ export function evalNode(node, env, ctx, builtins) {
         const hint = HOST_NAME_HINT(node.name, ctx);
         if (hint) throw new RonmlError(hint);
       }
-      // A dotted name ending .ml/.md is a FILE, not a node — so cd/ls/copy/eliza
-      // can carry it around the drives. Everything else is a node id (OB_XXXX).
-      if (/\.(ml|md)$/i.test(node.name)) return { tag: 'file', name: node.name };
-      return { tag: 'node', id: node.name };
+      // AN UNBOUND NAME IS AN ERROR. Standard ML has no bare atoms: a name that
+      // was never bound cannot be a value.
+      //
+      // It used to become one here, an atom spelling itself, which is a game-ism
+      // that survived the cut into src/lang/. NostOS needs bare words as values
+      // (a node code OB_1A2B, a filename foo.ml) and the language inherited the
+      // rule wholesale. The cost was three silent defects: `val x = notbound`
+      // bound the typo and said nothing, and a name hidden behind an opaque
+      // signature came back as the atom `T.hidden` instead of being refused,
+      // which made both `:>` and signature abbreviation look like they worked.
+      //
+      // The host may still have the behaviour, by answering this hook. NostOS
+      // does; the standalone language does not, and refuses.
+      if (HOST_UNBOUND) {
+        const v = HOST_UNBOUND(node.name, ctx);
+        if (v) return v;
+      }
+      throw new RonmlError(`unbound variable: ${node.name}`);
     }
     case 'Let': {
       // RECURSIVE, like SML's `fun`: the scope is created first and the name is

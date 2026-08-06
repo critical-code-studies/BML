@@ -78,11 +78,35 @@ test('unknownName is a question the language asks, not a table it reads', () => 
   assert.deepEqual(asked, ['wibble']);
 });
 
-test('unknownName answering null lets a bare word through as a value', () => {
-  // This is what a machine's own program needs: `patrol` is the intent it chose,
-  // not a typo.
-  const bml = createInterpreter({ typecheck: 'off', hooks: { unknownName: () => null } });
-  assert.equal(bml.run('patrol').ok, true);
+test('there are two questions about an unknown name, and they are separate', () => {
+  // `unknownName` is asked at the TOP LEVEL only: is a bare word typed as a
+  // whole line a typo? Answering null means "let it through". That used to be
+  // enough, because the evaluator then turned any unbound name into an atom.
+  // Since v1.299 it does not — an unbound name is an error, as it is in
+  // Standard ML — so a host that wants bare words as values must also say what
+  // one IS. NostOS answers both; the language alone answers neither.
+  const passesTheTypoCheck = createInterpreter({
+    typecheck: 'off', hooks: { unknownName: () => null },
+  });
+  assert.equal(passesTheTypoCheck.run('patrol').ok, false, 'still unbound: nothing said what it is');
+  assert.match(passesTheTypoCheck.run('patrol').text, /unbound variable/);
+});
+
+test('an unbound name is an error, which is what Standard ML says', () => {
+  // D-55, and the mechanism behind D-04. `val x = notbound` used to bind the
+  // typo to an atom of its own spelling and say nothing.
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('val x = notbound').ok, false);
+  assert.match(bml.run('val x = notbound').text, /unbound variable: notbound/);
+});
+
+test('a name hidden by an opaque signature is refused, not spelled back', () => {
+  // D-04. It came back as the atom `T.hidden`, so `:>` looked like it worked.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('signature SIG = sig val v : int end');
+  bml.run('structure T :> SIG = struct val v = 1 val hidden = 2 end');
+  assert.equal(bml.run('T.v').text, '1', 'what the signature shows is there');
+  assert.equal(bml.run('T.hidden').ok, false, 'what it hides is not');
 });
 
 test('with no hook at all the language uses its own words', () => {
@@ -288,4 +312,69 @@ test('valOf, isSome and getOpt are at top level as well as in Option', () => {
   assert.equal(bml.run('valOf (SOME 2)').text, '2');
   assert.equal(bml.run('isSome NONE').text, 'false');
   assert.equal(bml.run('getOpt (NONE, 9)').text, '9');
+});
+
+// ---- nine departures closed (v1.299) ----------------------------------------
+
+test('a signature abbreviation inherits the names it abbreviates', () => {
+  // D-05, and the cause is worth keeping: `isKeyword` lowercases, so a
+  // signature NAMED `SIG` looked like the keyword `sig` and
+  // `signature ABBR = SIG` parsed as an empty `sig … end` block.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('signature SIG = sig val v : int end');
+  bml.run('signature ABBR = SIG');
+  bml.run('structure U :> ABBR = struct val v = 3 end');
+  assert.equal(bml.run('U.v').text, '3');
+});
+
+test('val rec binds the function, not a variable called rec', () => {
+  // D-07. `rec` was read as the name, so `fact` never bound at all.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('val rec fact = fn n => if n = 0 then 1 else n * fact (n - 1)');
+  assert.equal(bml.run('fact 6').text, '720');
+});
+
+test('comments nest, which the Definition says in section 2.3', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('(* outer (* inner *) still outer *) 2').text, '2');
+  assert.equal(bml.run('(* (* (* deep *) *) *) 4').text, '4');
+});
+
+test('hex and scientific literals', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('0x1F').text, '31');
+  assert.equal(bml.run('0xff').text, '255');
+  assert.equal(bml.run('1e3').text, '1000.0');
+  assert.equal(bml.run('1.5e2').text, '150.0');
+  // SML writes a negative exponent with a tilde, like every other negative.
+  assert.equal(bml.run('2.0e~3').text, '0.002');
+});
+
+test('whitespace is allowed between ~ and what it negates', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  assert.equal(bml.run('~ 3 + 4').text, '1');
+  assert.equal(bml.run('~3').text, '~3');
+  assert.equal(bml.run('~ (2 + 1)').text, '~3');
+});
+
+test('and is simultaneous for values and still recursive for functions', () => {
+  // D-53. Every right-hand side sees what was in scope BEFORE the declaration,
+  // which is the whole difference between `and` and two declarations in a row.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.run('val u = 1');
+  bml.run('val u = 2 and w = u');
+  assert.equal(bml.run('w').text, '1', 'w saw the OLD u');
+  assert.equal(bml.run('u').text, '2', 'and u is the new one');
+  bml.run('val a = 1 and b = 2');
+  assert.equal(bml.run('a + b').text, '3');
+  // `fun` chains must NOT be held back: mutual recursion needs each name in
+  // scope while the others are defined.
+  bml.run('fun ev n = if n = 0 then true else od (n-1) and od n = if n = 0 then false else ev (n-1)');
+  assert.equal(bml.run('ev 4').text, 'true');
+});
+
+test('print is Basis and writes a string', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('print "hello"').ok, true);
 });
