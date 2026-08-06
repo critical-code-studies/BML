@@ -56,6 +56,16 @@ const VERSION_URL = 'https://raw.githubusercontent.com/critical-code-studies/BML
 // piped session stays quiet, and every later interactive session read it and
 // announced an update that did not exist. Test fixtures must not be able to
 // reach into the thing they are testing.
+// THE STEP BUDGET AT A PROMPT. Every run counts steps so a program that never
+// comes back faults instead of hanging. The default is the GAME's, 200,000,
+// picked so a machine's program cannot stall a render loop — and a command line
+// has no render loop, so a REPL inherited a constraint it does not have. It
+// stopped `sum (20000, 0)` in the same release that gave the language proper
+// tail calls.
+//
+// 50 million: a runaway faults in about a second, and `sum (1000000, 0)` runs.
+const REPL_FUEL = 50000000;
+
 const CACHE = process.env.BML_VERSION_CACHE || path.join(os.tmpdir(), 'bml-version-check.json');
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -264,7 +274,7 @@ function step(src) {
   if (use) return runFile(use[1]);
 
   const ty = bml.typeReport(line);
-  const r = bml.run(line);
+  const r = bml.run(line, { fuel: REPL_FUEL });
   if (!r.ok) { console.log(r.text); return false; }
   for (const out of smlEcho(r.text, ty)) console.log(out);
   return true;

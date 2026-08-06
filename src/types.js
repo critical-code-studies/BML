@@ -352,10 +352,30 @@ export function infer(node, env, cons) {
       if (k === 'true' || k === 'false') return BOOL;
       if (k === 'nil') return listOf(fresh());
       if (cons[node.name]) return instantiate(cons[node.name]);
-      // A name this module has never seen. Not an error: the console has verbs
-      // that reach into the world, and refusing them would make inference a
-      // gate rather than a report.
-      return fresh();
+      // A name nothing has bound. Standard ML makes it an error, and so does
+      // the EVALUATOR here since v1.299 — but the checker went on inventing a
+      // fresh variable for it, so `:t nosuchname` answered `'a` and told you a
+      // name had a type when there was no such name. Silent, and it is what
+      // made `:t map` look like a typing bug when `map` is simply not bound at
+      // top level (`List.map` is).
+      //
+      // The reason for the old behaviour was a GAME reason: NostOS consoles
+      // have verbs that reach into the world, and refusing them would make
+      // inference a gate rather than a report. So this takes the same shape as
+      // the evaluator's `setHostUnbound` — the language refuses, and a host
+      // that has its own names says so.
+      if (HOST_KNOWS_NAME && HOST_KNOWS_NAME(node.name)) return fresh();
+      // A QUALIFIED name keeps the old fallback, and the line between the two
+      // is which side the gap is on. `map` is a plain name: if nothing bound
+      // it, the program is wrong. `Small.keep` is a member of a structure, and
+      // this module cannot always work out what a structure holds — the result
+      // of a functor application is the standing case, where the evaluator
+      // binds the members and the checker never learns them. Refusing there
+      // would make the checker gate on ITS OWN gaps and reject a correct
+      // program, which is how `examples/07-modules.ml` broke the first time
+      // this refusal went in without the distinction.
+      if (node.name.includes('.')) return fresh();
+      throw new TypeError_(`unbound variable: ${node.name}`);
     }
 
     case 'Lam': {
@@ -589,7 +609,20 @@ export function infer(node, env, cons) {
       for (const d of node.decls || []) {
         if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* a member this module cannot type is not an error in the structure */ } continue; }
         try {
-          const t = infer(d.value, inner, cons);
+          // BIND THE MEMBER'S OWN NAME FIRST, exactly as 'TopLet' does above.
+          // Every function in the Basis is recursive — `fun map f nil = nil |
+          // map f (h :: t) = f h :: map f t` names itself in its own body — and
+          // without this the self-reference is a name nothing has bound. It went
+          // unnoticed while an unbound name silently became a fresh variable:
+          // the member typed, wrongly but quietly. The moment the checker began
+          // refusing unbound names instead, EVERY recursive member of the Basis
+          // failed to type and was dropped by the catch below, so `List.map`
+          // vanished from the checker's registry and strict mode refused the
+          // whole standard library.
+          const v = fresh();
+          const rec = { ...inner, [d.name.toLowerCase()]: mono(v) };
+          const t = infer(d.value, rec, cons);
+          unify(v, t);
           const sch = isSyntacticValue(d.value) ? generalise(env, t) : mono(t);
           inner[d.name.toLowerCase()] = sch;
           members[d.name.toLowerCase()] = sch;
@@ -637,6 +670,13 @@ export function fromAnnotation(a, vars) {
 // Warnings raised while inferring the current line. A module-level list because
 // inference is a recursive walk and threading a collector through every case
 // would cost more than it is worth for one advisory message.
+// What the HOST claims to know. The mirror of `setHostUnbound` in eval.js: the
+// language refuses a name nothing has bound, and NostOS answers for the verbs
+// its consoles reach the world through, which were never declared anywhere.
+// Nothing sets this in BML, so BML refuses, which is what Standard ML does.
+let HOST_KNOWS_NAME = null;
+export function setHostKnowsName(fn) { HOST_KNOWS_NAME = fn; }
+
 let WARNINGS = [];
 
 export function typeOf(ast, session = {}) {

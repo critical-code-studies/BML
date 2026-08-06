@@ -239,11 +239,42 @@ test('a member that will not type does not stop the rest of the structure', () =
   assert.match(String(bml.typeReport('M.also')), /->/, 'the member after the bad one is still typed');
 });
 
-test('an unknown name still falls back rather than erroring', () => {
-  // The fallback is deliberate: the game has verbs that reach into the world and
-  // refusing them would make inference a gate rather than a report.
+test('the checker refuses an unbound name unless a host claims it', () => {
+  // It used to answer `'a` for any name nothing had bound, so `:t nosuchthing`
+  // reported a type for a name that does not exist. That is what made `:t map`
+  // look like a typing bug when `map` is simply not bound at top level — only
+  // `List.map` is — and the evaluator had said `unbound variable` since v1.299.
+  //
+  // The reason for the fallback was a GAME reason, so it moved to a host hook,
+  // the twin of the evaluator's `setHostUnbound`. NostOS answers for its bare
+  // words; nothing answers in BML, so BML does what Standard ML does.
   const bml = createInterpreter({ typecheck: 'report' });
-  assert.equal(bml.typeReport('someVerbTheHostSupplies'), "'a");
+  assert.match(bml.typeReport('someVerbTheHostSupplies'), /unbound variable/);
+  assert.match(bml.typeReport('map'), /unbound variable/, 'map is List.map, not a top-level name');
+  assert.equal(bml.typeReport('hd'), "'a list -> 'a", 'a name that IS bound still types');
+
+  // A QUALIFIED name keeps the fallback, and the line is about whose gap it is.
+  // The checker cannot always work out what a structure holds — the result of a
+  // functor application is the standing case — so refusing there would reject a
+  // correct program on the checker's own incompleteness. examples/07-modules.ml
+  // is exactly that program.
+  assert.equal(bml.typeReport('Whatever.member'), "'a");
+});
+
+test('the whole Basis types, which needs recursive members bound first', () => {
+  // Every function in the Basis names itself in its own body. The structure
+  // member walk did not bind the member's own name before inferring it, so the
+  // self-reference was unbound — invisible while an unbound name quietly became
+  // a fresh variable, and total the moment the checker started refusing: every
+  // recursive member was dropped, and strict mode refused the standard library.
+  for (const mode of ['report', 'strict']) {
+    const bml = createInterpreter({ typecheck: mode });
+    bml.loadPrelude();
+    assert.equal(bml.run('List.map (fn x => x + 1) [1, 2]').text, '[2, 3]', `${mode}: List.map runs`);
+    assert.equal(bml.typeReport('List.map'), "('a -> 'b) -> 'a list -> 'b list", `${mode}: and types`);
+    assert.equal(bml.typeReport('List.partition'), "('a -> bool) -> 'a list -> 'a list * 'a list", mode);
+    assert.equal(bml.typeReport('List.length'), "'a list -> int", mode);
+  }
 });
 
 test('a multi-argument constructor typechecks in both spellings', () => {
