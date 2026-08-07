@@ -201,7 +201,6 @@ Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.</s
 <div class="term">
   <div class="bar">
     <label><input type="checkbox" id="strict" checked> strict</label>
-    <span id="mode">a line that does not typecheck will not run</span>
     <span class="sp"></span>
     <button id="btn-help">help</button>
     <button id="btn-reset">reset</button>
@@ -420,7 +419,6 @@ const live     = document.getElementById('live');
 const input    = document.getElementById('in');
 const src      = document.getElementById('src');
 const strict   = document.getElementById('strict');
-const modeEl   = document.getElementById('mode');
 const exSel    = document.getElementById('ex');
 const phos     = document.getElementById('phos');
 
@@ -604,9 +602,6 @@ document.getElementById('btn-reset').addEventListener('click', () => {
   clearScreen(); makeSession(true); input.focus();
 });
 strict.addEventListener('change', () => {
-  modeEl.textContent = strict.checked
-    ? 'a line that does not typecheck will not run'
-    : 'a clash is named, and the line runs anyway';
   write('');
   write(`(* ${strict.checked ? 'strict' : 'advisory'}: a fresh session *)`, 'p');
   makeSession(false);
