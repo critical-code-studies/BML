@@ -404,7 +404,11 @@ export function evalNode(node, env, ctx, builtins) {
         published.push(bare);
       }
       if (!published.length) throw new RonmlError(`no structure ${node.from} to name`);
-      return { tag: 'str', v: `structure ${node.name} : ${published.length} name(s)` };
+      // The same shape a `struct` declaration returns, so the prompt echoes
+      // `structure Q : 2 name(s)` rather than wrapping it as a string value:
+      // `val it = "structure Q : 2 name(s)" : unit`, which said the declaration
+      // WAS a string.
+      return { tag: 'struct', name: node.name, names: published };
     }
 
     case 'StructApply': {

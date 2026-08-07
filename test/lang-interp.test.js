@@ -1142,3 +1142,13 @@ test('a line that cannot have ended takes the next one with it', () => {
   assert.equal(joined.length, 1, 'one declaration, not two');
   assert.match(joined[0].text, /^functor DictFun .* = struct .* end$/);
 });
+
+test('an alias echoes as a structure, not as a string', () => {
+  // It returned a str value, so the prompt printed
+  // `val it = "structure Q : 2 name(s)" : unit`, which said the declaration
+  // WAS a string. It returns what a `struct` declaration returns.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  bml.run('structure Queue = struct val empty = nil end');
+  assert.equal(bml.run('structure Q = Queue').text, 'structure Q : 1 name(s)');
+});
