@@ -10,6 +10,9 @@ Standard ML* (1987).
 
 A little Standard ML, in plain JavaScript. No build step and no dependencies.
 
+**[Try it in the browser →](https://critical-code-studies.github.io/BML/)** The
+whole language runs in the page: the same files, no server behind the prompt.
+
 BML is a small implementation of Standard ML, the lexer, the parser, the type
 inference, the standard library, all of it short enough that one person can hold
 it in mind and follow what happens to a program between the typing and the

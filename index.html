@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BML — a little Standard ML</title>
+<meta name="description" content="BML is a small implementation of Standard ML. The whole language runs in this page: type at the prompt and it answers.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230b0c0b'/><text y='25' x='3' font-family='monospace' font-size='22' fill='%233ce07a'>-</text></svg>">
+<style>
+  /* A terminal, and the page is inside it. The look is a VT on a UK AI lab
+     bench about 1990: phosphor on black, one family, one weight, 80 columns.
+     Poplog ran on that furniture at Sussex, and Standard ML was added to Poplog
+     by Robert Duncan and Simon Nichols, so the setting is not a costume. */
+  :root {
+    --bg:    #0b0c0b;
+    --fg:    #c8ccc4;
+    --dim:   #6d7469;
+    --glow:  #3ce07a;   /* phosphor: prompts, headings, what the machine says */
+    --in:    #eef3e8;   /* what you typed */
+    --ty:    #86b8e0;   /* the type the checker worked out */
+    --err:   #e4794f;
+    --rule:  #23261f;
+    --panel: #101210;
+    --scrim: rgba(4,5,4,.82);
+  }
+  html[data-phos="amber"] {
+    --glow: #ffb642; --ty: #d9c07a; --in: #ffeccd; --fg: #d6c9ae; --dim: #7d7157;
+  }
+  html[data-phos="paper"] {
+    --bg: #f6f5f1; --fg: #23241f; --dim: #6a6c62; --glow: #1c5c33; --in: #000;
+    --ty: #1d4a78; --err: #a33c15; --rule: #dbd9d1; --panel: #fff;
+    --scrim: rgba(40,40,36,.5);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 "SF Mono", ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    padding: 0 1rem 3rem;
+  }
+  .screen { max-width: 84ch; margin: 0 auto; }
+  a { color: var(--glow); }
+  b, strong { color: var(--in); font-weight: 600; }
+  em { color: var(--in); font-style: italic; }
+  code { color: var(--in); }
+
+  /* ---- banner ---- */
+  h1 { position: absolute; left: -9999px; }
+  .banner { padding: 2.2rem 0 .3rem; white-space: pre-wrap; color: var(--glow); margin: 0; font: inherit; }
+  .banner .k { color: var(--dim); }
+
+  /* ---- menu ---- */
+  nav {
+    display: flex; gap: .35rem; flex-wrap: wrap; align-items: center;
+    margin: 1rem 0 0; padding: .45rem 0; border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule); font-size: 13px;
+  }
+  nav button, nav a.item, nav select {
+    font: inherit; background: transparent; color: var(--fg); cursor: pointer;
+    border: 1px solid transparent; border-radius: 2px; padding: .2rem .5rem;
+    text-decoration: none;
+  }
+  nav button:hover, nav a.item:hover, nav select:hover { color: var(--glow); border-color: var(--rule); }
+  nav .sp { flex: 1 1 auto; }
+  nav select { color: var(--dim); }
+
+  /* ---- the terminal ----------------------------------------------------
+     One scrolling surface. The prompt is the LAST LINE OF THE TRANSCRIPT
+     rather than a box under it, because that is where a terminal puts it:
+     you type into the same flow the answers come back on. */
+  .term {
+    border: 1px solid var(--rule); border-radius: 2px; background: var(--panel);
+    margin: 1.1rem 0 0;
+  }
+  .bar {
+    display: flex; gap: .55rem; align-items: center; flex-wrap: wrap;
+    padding: .35rem .65rem; border-bottom: 1px solid var(--rule);
+    font-size: 12px; color: var(--dim);
+  }
+  .bar .sp { flex: 1 1 auto; }
+  .bar button {
+    font: inherit; background: transparent; color: var(--fg);
+    border: 1px solid var(--rule); border-radius: 2px; padding: .18rem .45rem; cursor: pointer;
+  }
+  .bar button:hover { border-color: var(--glow); color: var(--glow); }
+  .bar label { display: inline-flex; gap: .3rem; align-items: center; cursor: pointer; }
+
+  #screen {
+    margin: 0; padding: .75rem .8rem 1rem; height: 26rem; overflow-y: auto;
+    font-size: 13.5px; line-height: 1.55; cursor: text;
+  }
+  @media (max-width: 40rem) { #screen { height: 21rem; } }
+  #screen .i   { color: var(--in); }
+  #screen .sys { color: var(--glow); }
+  #screen .p   { color: var(--dim); }
+  #screen .ty  { color: var(--ty); }
+  #screen .e   { color: var(--err); }
+  .row { white-space: pre-wrap; word-break: break-word; }
+
+  /* the live line: prompt, the text you are typing, a block cursor */
+  #live { display: flex; align-items: baseline; }
+  #live .ps { color: var(--glow); white-space: pre; }
+  #in {
+    flex: 1 1 auto; min-width: 2ch;
+    background: transparent; border: 0; outline: 0; padding: 0; margin: 0;
+    color: var(--in); font: inherit; font-size: 13.5px; line-height: inherit;
+    caret-color: var(--glow);
+  }
+  #in::placeholder { color: var(--dim); }
+  #blk { color: var(--glow); animation: blink 1.1s steps(1) infinite; }
+  #screen:focus-within #blk { animation: none; opacity: 0; }  /* the real caret takes over */
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #blk { animation: none; } }
+
+  /* ---- the program pane ---- */
+  .prog { margin-top: 1.5rem; }
+  .prog-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .45rem; font-size: 12px; color: var(--dim); }
+  .prog-head .sp { flex: 1 1 auto; }
+  .prog-head select, .prog-head button {
+    font: inherit; font-size: 12px; background: transparent; color: var(--fg);
+    border: 1px solid var(--rule); border-radius: 2px; padding: .22rem .45rem; cursor: pointer;
+  }
+  .prog-head button.go { color: var(--bg); background: var(--glow); border-color: var(--glow); font-weight: 600; }
+  .prog-head select:hover, .prog-head button:hover { border-color: var(--glow); }
+  #src {
+    width: 100%; min-height: 11rem; resize: vertical; font: inherit; font-size: 13.5px;
+    background: var(--panel); color: var(--fg);
+    border: 1px solid var(--rule); border-radius: 2px; padding: .7rem;
+  }
+  #src:focus { outline: 1px solid var(--glow); outline-offset: 1px; }
+
+  /* ---- modals ---- */
+  dialog {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--rule);
+    border-radius: 2px; padding: 0; max-width: 84ch; width: calc(100% - 2rem);
+    max-height: 85vh; font: inherit;
+  }
+  dialog::backdrop { background: var(--scrim); }
+  .m-head {
+    display: flex; align-items: center; gap: 1rem;
+    padding: .55rem .9rem; border-bottom: 1px solid var(--rule);
+    position: sticky; top: 0; background: var(--panel); z-index: 1;
+  }
+  .m-head h2 {
+    font-size: 13px; font-weight: 600; color: var(--glow); margin: 0;
+    letter-spacing: .1em; text-transform: uppercase; flex: 1 1 auto;
+  }
+  .m-head h2::before { content: "(* "; color: var(--dim); }
+  .m-head h2::after  { content: " *)"; color: var(--dim); }
+  .m-head button {
+    font: inherit; background: transparent; color: var(--dim); cursor: pointer;
+    border: 1px solid var(--rule); border-radius: 2px; padding: .12rem .45rem;
+  }
+  .m-head button:hover { color: var(--glow); border-color: var(--glow); }
+  .m-body { padding: 1rem .9rem 1.4rem; overflow-y: auto; max-height: calc(85vh - 3rem); }
+  .m-body p { margin: 0 0 1.05em; max-width: 74ch; }
+  .m-body h3 { font-size: 13px; color: var(--dim); margin: 1.6rem 0 .4rem; letter-spacing: .06em; font-weight: 600; }
+
+  .forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(31ch, 1fr)); gap: 0 2.5ch; }
+  .forms section { break-inside: avoid; margin-bottom: 1.3rem; }
+  .forms h3 { margin: 0 0 .35rem; }
+  .forms div { color: var(--in); white-space: pre-wrap; }
+  .forms div i { color: var(--dim); font-style: normal; }
+
+  .figures { width: 100%; border-collapse: collapse; }
+  .figures td { padding: .5rem .8rem .5rem 0; border-top: 1px solid var(--rule); vertical-align: top; }
+  .figures tr:first-child td { border-top: 0; }
+  .figures td:first-child { color: var(--in); white-space: nowrap; width: 1%; }
+
+  .tree { margin: .4rem 0 1.5rem; color: var(--glow); white-space: pre; overflow-x: auto; font: inherit; font-size: 13px; line-height: 1.5; }
+  .src-note { color: var(--dim); font-size: 13px; }
+
+  footer { margin-top: 2.5rem; padding-top: 1.1rem; border-top: 1px solid var(--rule); color: var(--dim); font-size: 13px; }
+  footer p { margin: 0 0 .4em; }
+  .nojs { border: 1px solid var(--err); padding: .8rem; color: var(--fg); }
+</style>
+</head>
+<body>
+<div class="screen">
+
+<h1>BML, a little Standard ML</h1>
+
+<pre class="banner" id="banner">BML, a little Standard ML
+<span class="k">Created by David M. Berry, University of Sussex, 2026.
+Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.</span></pre>
+
+<nav>
+  <button data-open="m-about">about</button>
+  <button data-open="m-forms">the forms</button>
+  <button data-open="m-conf">how much of SML</button>
+  <button data-open="m-pop">POP-11 &amp; Poplog</button>
+  <a class="item" href="https://github.com/critical-code-studies/BML">source ↗</a>
+  <span class="sp"></span>
+  <select id="phos" aria-label="Screen">
+    <option value="green">green</option>
+    <option value="amber">amber</option>
+    <option value="paper">paper</option>
+  </select>
+</nav>
+
+<div class="term">
+  <div class="bar">
+    <label><input type="checkbox" id="strict" checked> strict</label>
+    <span id="mode">a line that does not typecheck will not run</span>
+    <span class="sp"></span>
+    <button id="btn-help">help</button>
+    <button id="btn-reset">reset</button>
+    <button id="btn-clear">clear</button>
+  </div>
+  <div id="screen" aria-label="BML session" role="log" aria-live="polite">
+    <div id="live">
+      <span class="ps" aria-hidden="true">- </span>
+      <input id="in" autocomplete="off" autocapitalize="off" autocorrect="off"
+             spellcheck="false" aria-label="Type a declaration or an expression">
+      <span id="blk" aria-hidden="true">█</span>
+    </div>
+  </div>
+</div>
+
+<div class="prog">
+  <div class="prog-head">
+    <span>a whole program</span>
+    <span class="sp"></span>
+    <select id="ex" aria-label="Load an example"><option value="">load an example…</option></select>
+    <button class="go" id="btn-run">run</button>
+  </div>
+  <textarea id="src" spellcheck="false" aria-label="program"></textarea>
+</div>
+
+<noscript><p class="nojs">The interpreter runs in your browser, so this page needs
+JavaScript. The language is in <a href="https://github.com/critical-code-studies/BML">the
+repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a terminal.</p></noscript>
+
+<footer>
+  <p>BML created by David M. Berry, University of Sussex, 2026. MIT licensed.</p>
+  <p>With thanks to Robert Harper for the inspiration in his <em>Introduction to
+  Standard ML</em> (1986), and to Åke Wikström for <em>Functional Programming Using
+  Standard ML</em> (1987).</p>
+  <p><code>npm install github:critical-code-studies/BML</code></p>
+</footer>
+
+</div>
+
+<!-- ---------------------------------------------------------------- modals -->
+
+<dialog id="m-about">
+  <div class="m-head"><h2>about</h2><button data-close>esc</button></div>
+  <div class="m-body">
+    <p>BML is a small implementation of Standard ML, the lexer, the parser, the
+    type inference, the standard library, all of it short enough that one person
+    can hold it in mind and follow what happens to a program between the typing
+    and the answer.</p>
+
+    <p>The compiler is opaque, the type error arrives from nowhere, and the
+    student learns to propitiate the machine rather than to understand it.
+    Iteracy, by which I mean the capacity to read and write computational
+    processes rather than merely operate them, depends on there being something
+    available to read, and an instrument whose parameters are visible is a
+    different sort of object from one whose parameters are hidden. A teaching
+    interpreter can be the first sort, and this one tries to be. The standard
+    library is written in BML itself and loaded as source, so the
+    <code>map</code> you call is the <code>map</code> you could have written, and
+    you can open the file and confirm that it is.</p>
+
+    <p>The whole language is running in this page. There is no server behind the
+    prompt, nothing is sent anywhere, and the files answering here are the files
+    in the repository.</p>
+  </div>
+</dialog>
+
+<dialog id="m-forms">
+  <div class="m-head"><h2>the forms</h2><button data-close>esc</button></div>
+  <div class="m-body">
+    <div class="forms">
+      <section>
+        <h3>declarations</h3>
+        <div>val x = 5                 <i>bind a value</i></div>
+        <div>val (a, b) = (1, 2)       <i>through a pattern</i></div>
+        <div>fun f x = x + 1           <i>a function</i></div>
+        <div>fun fact 0 = 1            <i>clauses, in order</i></div>
+        <div>  | fact n = n * fact (n-1)</div>
+        <div>datatype t = A | B of int</div>
+        <div>type point = int * int</div>
+        <div>exception Bad</div>
+        <div>infix 6 plus</div>
+      </section>
+      <section>
+        <h3>expressions</h3>
+        <div>fn x =&gt; x + 1             <i>no name</i></div>
+        <div>if p then a else b</div>
+        <div>case e of A =&gt; 1</div>
+        <div>        | B n =&gt; n        <i>take it apart</i></div>
+        <div>let val x = 1 in x+1 end</div>
+        <div>e handle Bad =&gt; 0         <i>catch a raise</i></div>
+        <div>a andalso b   a orelse b</div>
+        <div>while !i &lt; 3 do i := !i+1</div>
+      </section>
+      <section>
+        <h3>values</h3>
+        <div>1   1.5   #"a"   "hi"</div>
+        <div>true   false   ()</div>
+        <div>(1, "a")                  <i>a tuple</i></div>
+        <div>{x = 1, y = 2}            <i>a record</i></div>
+        <div>[1, 2, 3]                 <i>a list</i></div>
+        <div>ref 0                     <i>a cell, read with !</i></div>
+      </section>
+      <section>
+        <h3>modules</h3>
+        <div>structure S = struct … end</div>
+        <div>signature S = sig … end</div>
+        <div>functor F (X : S) = struct …</div>
+        <div>&nbsp;</div>
+        <div><i>List String Char Int Real</i></div>
+        <div><i>Bool Option ListPair Math</i></div>
+        <div><i>Array Vector Word General</i></div>
+        <div><i>Substring TextIO</i></div>
+      </section>
+      <section>
+        <h3>at the prompt</h3>
+        <div>:t &lt;expr&gt;                  <i>a type, unevaluated</i></div>
+        <div>help                      <i>this list</i></div>
+        <div>↑ ↓                       <i>what you typed before</i></div>
+      </section>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="m-conf">
+  <div class="m-head"><h2>how much of standard ml</h2><button data-close>esc</button></div>
+  <div class="m-body">
+    <p>Measured rather than described, two ways. Both harnesses are in the
+    repository and both can be run against the source.</p>
+    <table class="figures">
+      <tr><td>344 / 408</td><td><b>84% of Harper's corpus.</b> The 32 example
+          files from his <em>Introduction to Standard ML</em> course, run as
+          written with no translation. The corpus is somebody else's programs,
+          which is what makes it worth quoting.</td></tr>
+      <tr><td>82 / 82</td><td><b>A feature checklist.</b> The core, patterns,
+          types, exceptions, modules, fixity, the lexis and the library, one case
+          each, passing only on an exact match. It catches what the corpus
+          happens not to use.</td></tr>
+      <tr><td>16 / ~47</td><td><b>The Basis.</b> The thinnest part. There is no
+          <code>OS</code> and there will not be one, since nothing behind this
+          has a file system.</td></tr>
+      <tr><td>not SML '97</td><td>Non-tail recursion is bounded by the host
+          stack. Tail calls are proper, as the Definition requires.</td></tr>
+    </table>
+  </div>
+</dialog>
+
+<dialog id="m-pop">
+  <div class="m-head"><h2>POP-11 and Poplog</h2><button data-close>esc</button></div>
+  <div class="m-body">
+    <p>Standard ML is not the first teaching language to have been argued over in
+    this building. POP-11 was written at Sussex in 1975, became the core of
+    Poplog, ran in UK departments through the 1980s and 1990s, and acquired a
+    Standard ML in the end.</p>
+
+<pre class="tree">POP-2        Edinburgh
+  │
+  ├─ POP-10   Julian Davies, on the DEC-10
+  └─ POP-11   Steve Hardy, Sussex, 1975, on a PDP-11/40
+       │
+       └─ Poplog  Sussex, from 1981
+            ├─ Prolog        1982   Chris Mellish, Steve Hardy
+            ├─ Common Lisp   1983   Jon Cunningham, John Williams
+            └─ Standard ML          Robert Duncan, Simon Nichols</pre>
+
+    <h3>where it started</h3>
+    <p>POP-2 was an Edinburgh language. Aaron Sloman met it in early 1972 over a
+    link to Edinburgh's Elliott 4130, and spent 1972 to 1973 in the Department of
+    Computational Logic there, learning AI under Bernard Meltzer.</p>
+
+    <h3>Sussex, October 1973</h3>
+    <p>Sloman returned and, with Max Clowes and colleagues, set up the Cognitive
+    Studies Programme. The question in front of them was which language could
+    serve beginners and research at the same time. They weighed LOGO, Lisp,
+    Prolog and Algol-68, and chose POP-2 as the base to build on.</p>
+
+    <h3>the implementation</h3>
+    <p>Steve Hardy arrived in October 1974 and wrote the first POP-11 over the
+    summer of 1975, on a PDP-11/40, finishing in January 1976. He called it
+    POP-11 because Julian Davies had called his DEC-10 system POP-10. The move to
+    VAX in 1981 was the making of it: John Gibson reimplemented POP-11 for VMS,
+    procedures compiled all the way to machine code rather than being
+    interpreted, and the bootstrap ran through earlier versions written in
+    assembler and C.</p>
+
+    <h3>what was distinctive</h3>
+    <p>A pattern matcher with segment variables, so
+    <code>[== [== ^item1 ??found ^item2 ==] ==]</code> did work that took a page
+    of Lisp or Pascal. Numerical indexing, <code>item(5)</code>, which grew into
+    a facility for treating any object as a procedure. An incremental compiler.
+    <code>dlocal</code>, a generalisation of Lisp's unwind-protect that restored
+    values on any exit including an abnormal one. And multi-branch conditionals
+    written <code>if … then … elseif … then … else … endif</code> rather than as
+    nested parentheses.</p>
+
+    <h3>why it spread</h3>
+    <p>POP-11 ran at Nottingham, Aberdeen, Warwick, Queen Mary College and
+    Sheffield as well as Sussex. A survey of Alvey-funded UK projects found three
+    languages rated good by all their users, POP-11, PARLOG and C++, and of those
+    POP-11 had the most. Sloman put the reach down to syntax, arguing that the AI
+    languages had not been taken up by programmers outside AI simply because of
+    the syntax of Lisp. POP-11 offered the same power in a shape a Pascal
+    programmer could read.</p>
+
+    <p class="src-note">Drawn from Aaron Sloman's own account,
+    <a href="https://cogaffarchive.org/Sloman.pop11.html">cogaffarchive.org/Sloman.pop11.html</a>.
+    Poplog is now free and open source.</p>
+  </div>
+</dialog>
+
+<script type="module">
+import { createInterpreter, smlEcho, joinProgram, BML_NAME, BML_VERSION }
+  from './src/index.js';
+
+const screenEl = document.getElementById('screen');
+const live     = document.getElementById('live');
+const input    = document.getElementById('in');
+const src      = document.getElementById('src');
+const strict   = document.getElementById('strict');
+const modeEl   = document.getElementById('mode');
+const exSel    = document.getElementById('ex');
+const phos     = document.getElementById('phos');
+
+// The banner carries the version, so it is written rather than kept in step by
+// hand.
+document.getElementById('banner').firstChild.textContent =
+  `${BML_NAME} ${BML_VERSION}, a little Standard ML\n`;
+
+// ---- the transcript ---------------------------------------------------------
+//
+// Everything is inserted BEFORE the live line, so the prompt stays at the
+// bottom of the scroll the way a terminal keeps it.
+const scrollDown = () => { screenEl.scrollTop = screenEl.scrollHeight; };
+
+const write = (text, cls) => {
+  const el = document.createElement('div');
+  el.className = 'row' + (cls ? ' ' + cls : '');
+  el.textContent = text === '' ? ' ' : text;
+  screenEl.insertBefore(el, live);
+  scrollDown();
+};
+
+// An answer carries its type after a colon. The type gets its own colour
+// because it is the part the checker worked out rather than the part you typed.
+const writeAnswer = (line) => {
+  if (/^(ERR|TYPE):/.test(line)) { write(line, 'e'); return; }
+  const m = /^([\s\S]*?)( : [^\n]*)$/.exec(line);
+  const el = document.createElement('div');
+  el.className = 'row';
+  if (!m) {
+    el.textContent = line;
+  } else {
+    el.appendChild(document.createTextNode(m[1]));
+    const ty = document.createElement('span');
+    ty.className = 'ty';
+    ty.textContent = m[2];
+    el.appendChild(ty);
+  }
+  screenEl.insertBefore(el, live);
+  scrollDown();
+};
+
+const clearScreen = () => {
+  while (screenEl.firstChild !== live) screenEl.removeChild(screenEl.firstChild);
+};
+
+// ---- the session ------------------------------------------------------------
+let bml;
+function makeSession(announce) {
+  bml = createInterpreter({ typecheck: strict.checked ? 'strict' : 'report' });
+  bml.loadPrelude();
+  if (announce) {
+    write(`${BML_NAME} ${BML_VERSION}, a little Standard ML`, 'sys');
+    write('Created by David M. Berry, University of Sussex, 2026.', 'p');
+    write('Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.', 'p');
+    write('');
+    write(strict.checked ? 'strict: use typecheck' : 'advisory: a clash is named, the line runs', 'p');
+    write('Type help for the forms.', 'p');
+    write('');
+  }
+}
+
+// ---- one line ---------------------------------------------------------------
+function runLine(line, echo = true) {
+  const text = String(line);
+  if (echo) write('- ' + text, 'i');
+  if (!text.trim()) return;
+  if (text.trim() === 'help') { showHelp(); return; }
+
+  const t = /^\s*:t\s+([\s\S]+)$/.exec(text);
+  if (t) {
+    let ty = null;
+    try { ty = bml.typeReport(t[1]); } catch { ty = null; }
+    if (ty === null) write('no type for that', 'e');
+    else write(ty, String(ty).startsWith('TYPE:') ? 'e' : 'ty');
+    return;
+  }
+
+  let ty = null;
+  try { ty = bml.typeReport(text); } catch { ty = null; }
+  let r;
+  try { r = bml.run(text); }
+  catch (e) { write('ERR: ' + (e && e.message ? e.message : String(e)), 'e'); return; }
+
+  if (!r.ok) { write(r.text, 'e'); return; }
+  if (!r.text) return;
+  for (const l of smlEcho(r.text, ty)) writeAnswer(l);
+}
+
+function showHelp() {
+  for (const l of [
+    'DECLARATIONS',
+    '  val x = 5                    bind a value',
+    '  fun f x = x + 1              a function',
+    '  fun fact 0 = 1 | fact n = …  clauses, tried in order',
+    '  datatype t = A | B of int    a type of your own',
+    '  structure S = struct … end   a module',
+    '',
+    'EXPRESSIONS',
+    '  fn x => x + 1                a function with no name',
+    '  case e of A => 1 | B n => n  take a value apart',
+    '  let val x = 1 in x + 1 end   a binding with a scope',
+    '  e handle Bad => 0            catch what was raised',
+    '',
+    'AT THE PROMPT',
+    '  :t <expr>                    a type, without evaluating',
+    '  help                         this',
+    '',
+    'The library: List, String, Char, Int, Real, Bool, Option, ListPair,',
+    'Math, Array, Vector, Word, Substring, General, TextIO.',
+  ]) write(l, 'p');
+}
+
+// ---- a whole program --------------------------------------------------------
+function runProgram(text) {
+  if (!String(text).trim()) return;
+  write('');
+  write('(* running the program *)', 'p');
+  for (const l of joinProgram(text)) {
+    const line = String(l && l.text !== undefined ? l.text : l);
+    if (line.trim()) runLine(line);
+  }
+}
+
+// ---- the examples -----------------------------------------------------------
+for (const [file, title] of [
+  ['01-first-steps.ml',    'first steps'],
+  ['02-functions.ml',      'functions'],
+  ['03-lists.ml',          'lists'],
+  ['04-your-own-types.ml', 'types of your own'],
+  ['05-fizzbuzz.ml',       'fizzbuzz'],
+  ['06-fun-and-games.ml',  'fun and games'],
+  ['07-modules.ml',        'modules'],
+  ['08-sorting.ml',        'sorting'],
+  ['09-eight-queens.ml',   'eight queens'],
+]) {
+  const o = document.createElement('option');
+  o.value = file; o.textContent = title;
+  exSel.appendChild(o);
+}
+exSel.addEventListener('change', async () => {
+  const file = exSel.value;
+  if (!file) return;
+  try {
+    const res = await fetch('./examples/' + file);
+    if (!res.ok) throw new Error(String(res.status));
+    src.value = await res.text();
+    src.focus();
+  } catch {
+    write(`could not read ${file}. The examples are in the repository.`, 'e');
+  }
+});
+
+// ---- the prompt -------------------------------------------------------------
+const history = [];
+let hIdx = 0;
+input.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') {
+    const line = input.value;
+    input.value = '';
+    if (line.trim()) { history.push(line); hIdx = history.length; }
+    runLine(line);
+  } else if (ev.key === 'ArrowUp' && history.length) {
+    ev.preventDefault();
+    hIdx = Math.max(0, hIdx - 1);
+    input.value = history[hIdx] || '';
+  } else if (ev.key === 'ArrowDown' && history.length) {
+    ev.preventDefault();
+    hIdx = Math.min(history.length, hIdx + 1);
+    input.value = hIdx === history.length ? '' : history[hIdx];
+  } else if (ev.key === 'l' && (ev.ctrlKey || ev.metaKey)) {
+    ev.preventDefault();
+    clearScreen();
+  }
+});
+
+document.getElementById('btn-run').addEventListener('click', () => runProgram(src.value));
+document.getElementById('btn-help').addEventListener('click', () => { showHelp(); input.focus(); });
+document.getElementById('btn-clear').addEventListener('click', () => { clearScreen(); input.focus(); });
+document.getElementById('btn-reset').addEventListener('click', () => {
+  clearScreen(); makeSession(true); input.focus();
+});
+strict.addEventListener('change', () => {
+  modeEl.textContent = strict.checked
+    ? 'a line that does not typecheck will not run'
+    : 'a clash is named, and the line runs anyway';
+  write('');
+  write(`(* ${strict.checked ? 'strict' : 'advisory'}: a fresh session *)`, 'p');
+  makeSession(false);
+});
+
+// Clicking anywhere on the screen puts the cursor back at the prompt, which is
+// what clicking a terminal does. A click that is finishing a selection is left
+// alone.
+screenEl.addEventListener('mouseup', () => {
+  if (!window.getSelection().toString()) input.focus();
+});
+
+// ---- the menu ---------------------------------------------------------------
+for (const b of document.querySelectorAll('[data-open]')) {
+  b.addEventListener('click', () => document.getElementById(b.dataset.open).showModal());
+}
+for (const b of document.querySelectorAll('[data-close]')) {
+  b.addEventListener('click', () => b.closest('dialog').close());
+}
+// A click landing on the dialog element itself rather than on anything inside
+// it is a click on the backdrop.
+for (const d of document.querySelectorAll('dialog')) {
+  d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
+}
+
+// ---- the screen -------------------------------------------------------------
+phos.addEventListener('change', () => {
+  document.documentElement.dataset.phos = phos.value;
+  try { localStorage.setItem('bml-phos', phos.value); } catch { /* private mode */ }
+});
+try {
+  const saved = localStorage.getItem('bml-phos');
+  if (saved) { phos.value = saved; document.documentElement.dataset.phos = saved; }
+} catch { /* private mode */ }
+
+// ---- go ---------------------------------------------------------------------
+makeSession(true);
+src.value = `(* A binary tree, and a sort that falls out of walking it. *)
+
+datatype 'a tree = Leaf | Node of 'a tree * 'a * 'a tree
+
+fun insert (Leaf, x) = Node (Leaf, x, Leaf)
+  | insert (Node (l, v, r), x) =
+      if x < v then Node (insert (l, x), v, r)
+      else Node (l, v, insert (r, x))
+
+fun toList Leaf = nil
+  | toList (Node (l, v, r)) = toList l @ [v] @ toList r
+
+fun sort xs = toList (List.foldl (fn (x, t) => insert (t, x)) Leaf xs)
+
+val sorted = sort [5, 3, 8, 1, 9, 2, 7]
+val words  = sort ["pop", "poplog", "ml", "sussex"]
+`;
+input.focus();
+</script>
+</body>
+</html>

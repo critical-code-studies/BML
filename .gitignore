@@ -4,3 +4,6 @@ node_modules/
 # made `bml --examples` refuse in a fresh clone: the directory it wanted to
 # create was already there.
 bml-examples/
+
+# local preview config, not part of the package
+.claude/
