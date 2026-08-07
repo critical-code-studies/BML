@@ -1144,6 +1144,16 @@ export function parse(toks, fixityIn) {
       // `structure M = F (A)` applies a functor rather than opening a struct.
       if (peek().t === 'IDENT' && !isKeyword(peek(), 'struct')) {
         const fn = eat('IDENT').v;
+        // `structure Q = Queue` — an ALIAS, not an application. With no `(`
+        // after the name there is no functor call here, and reading one anyway
+        // gave *Queue is not a functor*. It is the same form as
+        // `structure Key : ORDERED = K` inside a struct, which is how nearly
+        // every dictionary in the corpus names its ordering, so one refusal
+        // took the whole structure with it and everything downstream after
+        // that.
+        if (peek().t !== 'LP') {
+          return { type: 'StructAlias', name: nameTok.v, from: fn, ascribe };
+        }
         let arg = null;
         if (peek().t === 'LP') {
           p++;
@@ -1365,7 +1375,23 @@ export function joinProgram(text) {
     if (!line.trim()) continue;
     if (/^>/.test(line)) continue;
     line = line.replace(/^(\s*)-\s+(?=[A-Za-z(\[])/, '$1');
-    const continues = /^\s/.test(raw) || /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(line);
+    // A line CONTINUES the previous one when it is indented, or opens with
+    // something that cannot start a declaration.
+    const opensAsContinuation = /^\s/.test(raw) || /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(line);
+    // …or when the PREVIOUS line cannot have ended there. A declaration whose
+    // last token is `=` is waiting for its right-hand side, and the corpus
+    // writes exactly that:
+    //
+    //     functor DictFun (structure K : ORDERED) :> DICT where type … =
+    //     struct
+    //
+    // `struct` sits at column 0 and opens nothing on the list above, so the
+    // header was cut from its body: the header failed on the missing `struct`
+    // and the body arrived as a stray one. Same for a trailing `|` in a
+    // datatype written down the page.
+    const prev = out.length ? out[out.length - 1].text : '';
+    const prevWantsMore = /(=|\||=>|->|:|,|\bof)$/.test(prev.trim());
+    const continues = opensAsContinuation || (prevWantsMore && out.length);
     if (continues && out.length) out[out.length - 1].text += ` ${line.trim()}`;
     else out.push({ text: line.trim(), line: i + 1 });
   }

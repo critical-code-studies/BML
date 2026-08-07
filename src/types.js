@@ -681,6 +681,10 @@ export function infer(node, env, cons) {
     // makes it right: `val m = X.z + 1` is `int` because THIS argument's `z`
     // is an int, and a different argument could make it something else. That
     // is what a functor is for.
+    // `structure Q = Queue`. Nothing to infer: the members already have types
+    // under the old name, and `remember` copies them to the new one.
+    case 'StructAlias': return UNIT;
+
     case 'StructApply': {
       const f = CURRENT_FUNCTORS[node.functor];
       if (!f) return UNIT;
@@ -977,6 +981,16 @@ export function remember(ast, session, t) {
     session.__types[nameKey(ast.name)] = isSyntacticValue(ast.value)
       ? generalise({}, t)
       : mono(t);
+  } else if (ast.type === 'StructAlias') {
+    // Every member type under the old name appears under the new one, so
+    // `Q.insert` types as `Queue.insert` does rather than falling to the
+    // qualified-name fallback.
+    if (!session.__types) session.__types = {};
+    const from = `${nameKey(ast.from)}.`;
+    const to = `${nameKey(ast.name)}.`;
+    for (const k of Object.keys(session.__types)) {
+      if (k.startsWith(from)) session.__types[to + k.slice(from.length)] = session.__types[k];
+    }
   } else if ((ast.type === 'StructDecl' || ast.type === 'StructApply') && ast.__members) {
     // Published as flat qualified keys, `list.map`, because that is exactly how
     // the evaluator publishes them and how the parser hands the name over:

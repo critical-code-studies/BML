@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.13.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.14.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -36,7 +36,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.13.0, a little Standard ML
+BML 0.14.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -78,7 +78,7 @@ read the same `map` you would have written.
 
 It is measured rather than described, two ways. Against the 32 example files
 from Robert Harper's *Introduction to Standard ML* course, this build runs
-**344 of 408 top-level declarations (84%)** as written, with no translation:
+**349 of 408 top-level declarations (86%)** as written, with no translation:
 
 ```
 node tools/isml-conformance.mjs
@@ -95,6 +95,18 @@ The corpus is the figure to trust, being somebody else's programs rather than a
 list written here; the checklist catches what the corpus happens not to use.
 Harper's files contain no `while` and no arrays, so the corpus had nothing to
 say about either while both were missing.
+
+The harness reports what the rest ARE, which took some working out. Of the 59
+that do not run, 6 raise as Standard ML would, 13 are refused by the type
+checker and some of those refusals are correct (Harper prints deliberate
+errors: `typval.sml` line 8 is four ill-typed expressions in a row, put there
+to show a student what one looks like), 10 fail on a name an earlier failure
+would have bound, and 12 name something the file never defines at all. That
+leaves **18 this build genuinely cannot read**, and two of those are a LaTeX
+escape left in Harper's source.
+
+So 100% is not reachable, and the ceiling is not a fact about this build. Parts
+of the corpus are teaching listings that have never been through a compiler.
 
 That corpus is Harper's teaching material. The harness fetches it on first run
 into a gitignored cache; it is **not** in this repository and is not

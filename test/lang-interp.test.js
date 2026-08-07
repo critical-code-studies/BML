@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInterpreter, smlEcho, flattenSession, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
-import { DECL_KEYWORDS, BLOCK_ENDERS } from '../src/parse.js';
+import { DECL_KEYWORDS, BLOCK_ENDERS, joinProgram } from '../src/parse.js';
 
 test('an interpreter with no host at all still runs Standard ML', () => {
   const bml = createInterpreter();
@@ -1066,4 +1066,79 @@ test('a run reports one type per declaration', () => {
   assert.equal(ty, 'int\nstring');
   assert.deepEqual(smlEcho(bml.run('val p3 = 1; val q3 = "a"').text, ty),
     ['val p3 = 1 : int', 'val q3 = "a" : string']);
+});
+
+// ---- a structure bound to another structure (v1.308) ------------------------
+
+test('structure A = B names one structure under another', () => {
+  // `structure Q = Queue` was read as a functor application with no argument,
+  // so it answered *Queue is not a functor*. It is the same form as
+  // `structure Key : ORDERED = K` inside a struct, which is how nearly every
+  // dictionary in Harper's corpus names its ordering — so one refusal took the
+  // whole structure with it, and everything downstream after that.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('structure Queue = struct val empty = nil fun insert (x, q) = x :: q end');
+  assert.equal(bml.run('structure Q = Queue').ok, true);
+  assert.equal(bml.run('Q.insert (1, Q.empty)').text, '[1]');
+  assert.equal(bml.typeReport('Q.insert'), bml.typeReport('Queue.insert'),
+    'the checker sees the members too, not just the evaluator');
+});
+
+test('an alias may be ascribed, and the ascription narrows it', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('signature ORDERED = sig type t val lt : t -> t -> bool end');
+  bml.run('structure IntLT = struct type t = int fun lt a b = a < b val hidden = 9 end');
+  bml.run('structure Key : ORDERED = IntLT');
+  assert.equal(bml.run('Key.lt 1 2').text, 'true');
+  assert.equal(bml.run('Key.hidden').ok, false, 'the signature hides what it does not name');
+});
+
+test('an alias works inside a struct, and of a functor parameter', () => {
+  // Inside a struct the body runs in a scope that prototype-chains to the
+  // enclosing one, so own keys alone could not see the structure being named.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('signature ORDERED = sig type t val lt : t -> t -> bool end');
+  bml.run('structure IntLT = struct type t = int fun lt a b = a < b end');
+  bml.run('structure D = struct structure Key : ORDERED = IntLT val e = 1 end');
+  assert.equal(bml.run('D.e').text, '1');
+  assert.equal(bml.run('D.Key.lt 1 2').text, 'true');
+  // and the same form naming a functor's own parameter
+  bml.run('functor Dict (structure K : ORDERED) = struct structure Key : ORDERED = K val e = 2 end');
+  bml.run('structure D1 = Dict (structure K = IntLT)');
+  assert.equal(bml.run('D1.e').text, '2');
+});
+
+test('naming a structure that does not exist says so', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  const r = bml.run('structure Z = NoSuchThing');
+  assert.equal(r.ok, false);
+  assert.match(r.text, /no structure NoSuchThing/);
+});
+
+test('a failed match raises Match, and it is catchable', () => {
+  // `fun hd (h::_) = h` applied to nil is how Harper introduces the exception.
+  // It threw a plain error, so `handle Match` had nothing to catch: the gap
+  // v1.301 closed for Empty and Div, missed for this one because the evaluator
+  // raises it rather than a primitive.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('fun myhd (h::_) = h');
+  assert.match(bml.run('myhd nil').text, /uncaught exception Match/);
+  assert.equal(bml.run('myhd nil handle Match => 0').text, '0');
+  assert.equal(bml.run('(case 5 of 1 => 1) handle Match => ~1').text, '~1');
+  assert.match(bml.run('myhd nil').text, /no case matches/, 'and it still teaches');
+});
+
+test('a line that cannot have ended takes the next one with it', () => {
+  // `functor F (…) :> SIG where type … =` with `struct` at column 0 on the next
+  // line was split into two declarations: the header failed on the missing
+  // struct and the body arrived as a stray one.
+  const joined = joinProgram(
+    'functor DictFun (structure K : ORDERED) :> DICT where type Key.t = K.t =\n'
+    + 'struct\n  structure Key : ORDERED = K\n  val empty = 1\nend\n');
+  assert.equal(joined.length, 1, 'one declaration, not two');
+  assert.match(joined[0].text, /^functor DictFun .* = struct .* end$/);
 });

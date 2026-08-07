@@ -215,6 +215,79 @@ for (const n of NAMES) {
   }
 }
 
+
+// ---- WHAT AN OUTCOME ACTUALLY IS -------------------------------------------
+//
+// One number was doing too many jobs. A declaration that this build REFUSES is
+// not the same as one it cannot READ, and neither is the same as one that fails
+// only because something earlier failed. Three findings forced the split, each
+// checked against the corpus source rather than guessed:
+//
+//   1. Harper prints deliberate errors. typval.sml line 8 is four ill-typed
+//      expressions in a row, put there to show a student what a type error
+//      looks like. Refusing them is CORRECT, and the old scoring counted all
+//      four against us.
+//   2. `hd nil` raises. Standard ML raises too. Counting a raise as a failure
+//      is counting agreement as disagreement.
+//   3. Parts of the corpus are not valid Standard ML. parameterization.sml has
+//      a LaTeX escape left in the source (`\_`), `None` for `NONE`, and a
+//      constructor declared with three arguments and applied to four;
+//      hierarchies.sml writes `= sig` where the language wants `struct`. These
+//      are teaching listings and some have never been through a compiler.
+//
+// So 100% is not reachable and the ceiling is not a fact about this build. The
+// report says what each failure IS and leaves the reading to whoever reads it.
+//
+// There is deliberately NO hand-kept list of "refusals that are correct". That
+// is the departure register's lesson in reverse: a list nobody walks goes
+// stale, and this one could not be walked, since deciding whether a refusal is
+// right needs a reference implementation and there is none here.
+const OUTCOME = {
+  RAN:     'ran',
+  RAISED:  'raised',      // ran, and raised, as Standard ML would
+  TYPE:    'refused:type',  // MAY BE CORRECT — Harper's own errors land here
+  PARSE:   'refused:parse', // never correct: this build could not read it
+  CASCADE: 'cascade',       // failed on a name an earlier failure would have bound
+  SKETCH:  'not in listing', // names something the file never defines at all
+};
+
+/** The names a declaration would have bound, had it worked. */
+function bindsOf(src) {
+  const out = [];
+  const re = /\b(?:structure|functor|signature|datatype|type|exception|val|fun)\s+([A-Za-z_][\w']*)/g;
+  let m;
+  while ((m = re.exec(src))) out.push(m[1]);
+  // `open X` puts X's members in scope, so a failed open makes bare names fail.
+  const o = /\bopen\s+([A-Za-z_][\w']*)/.exec(src);
+  if (o) out.push(o[1]);
+  return out;
+}
+
+/** Classify one result, given the names earlier failures would have bound. */
+function classify(text, orphaned, declared) {
+  const t = String(text);
+  if (!t.startsWith('ERR')) return OUTCOME.RAN;
+  const msg = t.replace(/^ERR:\s*/, '');
+  if (/^uncaught exception/.test(msg)) return OUTCOME.RAISED;
+  // A missing name that an earlier failure would have supplied says nothing
+  // about this declaration. One refused `structure` can otherwise account for
+  // a dozen later failures and make the count look like a language problem.
+  // Every wording this build uses for "there is no such name". Missing one
+  // files a cascade as an independent failure, which is what the count was
+  // doing for `no structure X to name`.
+  const named = /(?:unbound variable[: ]*|no structure |)([A-Za-z_][\w'.]*)(?: is not a functor| to name| to open)|unbound variable[: ]*([A-Za-z_][\w'.]*)/.exec(msg);
+  const who = named && String(named[1] || named[2]).split('.')[0];
+  if (who && orphaned.has(who)) return OUTCOME.CASCADE;
+  // A NAME THE FILE NEVER DEFINES. Harper's listings are sketches as often as
+  // programs: subfun.sml writes `structure Key : ORDERED = StringLT` where
+  // StringLT appears nowhere in the file, two lines above
+  // `val insert = raise NotImplemented`. No implementation could run that, and
+  // counting it as a gap in this one says nothing about this one.
+  if (who && !declared.has(who)) return OUTCOME.SKETCH;
+  if (/^(expected|unexpected|'.*' cannot start|.* cannot start)/.test(msg)) return OUTCOME.PARSE;
+  return OUTCOME.TYPE;
+}
+
 const files = fs.readdirSync(DIR).filter((f) => f.endsWith('.sml')).sort();
 const report = [];
 for (const f of files) {
@@ -232,25 +305,61 @@ for (const f of files) {
   interp.loadPrelude();
   let attempted = 0, ok = 0, skipped = 0;
   const errs = [];
+  const counts = { ran: 0, raised: 0, 'refused:type': 0, 'refused:parse': 0, cascade: 0, 'not in listing': 0 };
+  // Names that a FAILED declaration in this file would have bound. Anything
+  // later that trips over one of them is a consequence, not a finding.
+  const orphaned = new Set();
+  // Every name the FILE binds, gathered before scoring, so a reference to
+  // something the listing never defines can be told from one this build cannot
+  // find.
+  const declared = new Set();
+  for (const d of ds) {
+    const t0 = translate(d);
+    if (t0 !== null) for (const n of bindsOf(t0)) declared.add(n);
+  }
   for (const d of ds) {
     const t = translate(d);
     if (t === null) { skipped++; continue; }
     attempted++;
     let r;
     try { r = interp.run(t); } catch (e) { r = { text: `ERR: ${e.message}` }; }
-    if (String(r.text).startsWith('ERR')) errs.push([t.slice(0, 58), String(r.text).replace(/^ERR:\s*/, '').slice(0, 46)]);
-    else ok++;
+    const outcome = classify(r.text, orphaned, declared);
+    counts[outcome]++;
+    if (outcome === OUTCOME.RAN) ok++;
+    else {
+      for (const n of bindsOf(t)) orphaned.add(n);
+      errs.push([t.slice(0, 52), outcome, String(r.text).replace(/^ERR:\s*/, '').slice(0, 40)]);
+    }
   }
-  report.push({ f, total: ds.length, attempted, ok, skipped, errs });
+  report.push({ f, total: ds.length, attempted, ok, skipped, errs, counts });
 }
 for (const r of report) {
   const pct = r.attempted ? Math.round((r.ok / r.attempted) * 100) : 0;
   console.log(`${r.f.padEnd(22)} decls ${String(r.total).padStart(3)}  tried ${String(r.attempted).padStart(3)}  ran ${String(r.ok).padStart(3)} (${String(pct).padStart(3)}%)  skipped ${String(r.skipped).padStart(3)}`);
   const show = process.argv.includes('--verbose') ? r.errs.length : 3;
-  for (const [t, e] of r.errs.slice(0, show)) console.log(`      × ${t}\n        ${e}`);
+  for (const [t, o, e] of r.errs.slice(0, show)) console.log(`      × ${t}\n        [${o}] ${e}`);
 }
 const T = report.reduce((a, r) => ({ a: a.a + r.attempted, o: a.o + r.ok, s: a.s + r.skipped }), { a: 0, o: 0, s: 0 });
+const C = report.reduce((a, r) => {
+  for (const k of Object.keys(r.counts)) a[k] = (a[k] || 0) + r.counts[k];
+  return a;
+}, {});
 console.log(`\nTOTAL attempted ${T.a}, ran ${T.o} (${Math.round(T.o / T.a * 100)}%), skipped as out-of-scope ${T.s}`);
+
+// WHAT THE REST ARE. One number said only that a declaration did not run,
+// which lumps a correct refusal in with a parse failure and counts one broken
+// structure a dozen times over.
+console.log('\nof the rest:');
+console.log(`  raised          ${String(C.raised || 0).padStart(3)}   ran, and raised, as Standard ML does`);
+console.log(`  refused: type   ${String(C['refused:type'] || 0).padStart(3)}   MAY BE CORRECT — Harper prints deliberate errors`);
+console.log(`  refused: parse  ${String(C['refused:parse'] || 0).padStart(3)}   could not be read. Never correct: this is the real gap`);
+console.log(`  cascade         ${String(C.cascade || 0).padStart(3)}   tripped over a name an earlier failure would have bound`);
+console.log(`  not in listing  ${String(C['not in listing'] || 0).padStart(3)}   names something the file never defines. A sketch, not a program`);
+console.log('\nThe corpus cannot reach 100%. Some of it is not valid Standard ML:');
+console.log('parameterization.sml has a LaTeX escape left in the source and a');
+console.log('constructor applied to four arguments where three were declared;');
+console.log('hierarchies.sml writes `= sig` where the language wants `struct`.');
+console.log('They are teaching listings, and some have never met a compiler.');
 
 // This line goes stale every time the language grows, which is the whole
 // history of the skip list above. Print the skip patterns themselves rather

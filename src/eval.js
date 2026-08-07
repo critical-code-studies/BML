@@ -383,6 +383,30 @@ export function evalNode(node, env, ctx, builtins) {
       return { tag: 'functor', name: node.name, param: node.param };
     }
 
+    // `structure Q = Queue` — one structure under another name. Every member
+    // of the old one appears under the new, and an ascription narrows what
+    // shows, exactly as it does on a struct.
+    case 'StructAlias': {
+      const store = (ctx && ctx.session) || {};
+      const prefix = `${nameKey(node.from)}.`;
+      const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;
+      const published = [];
+      // `for … in`, not Object.keys: INSIDE A STRUCT the body runs in a scope
+      // that prototype-chains to the enclosing one, so the structure being
+      // named is reachable but not an own property. Own keys alone made
+      // `struct structure Key : ORDERED = IntLT … end` answer *no structure
+      // IntLT to name*, which is the form the corpus uses everywhere.
+      for (const k in store) {
+        if (!k.startsWith(prefix)) continue;
+        const bare = k.slice(prefix.length);
+        if (allowed && !allowed.some((n) => nameKey(n) === bare)) continue;
+        store[`${nameKey(node.name)}.${bare}`] = store[k];
+        published.push(bare);
+      }
+      if (!published.length) throw new RonmlError(`no structure ${node.from} to name`);
+      return { tag: 'str', v: `structure ${node.name} : ${published.length} name(s)` };
+    }
+
     case 'StructApply': {
       const store = (ctx && ctx.session) || {};
       const f = (store.__functors || {})[node.functor];
@@ -611,7 +635,17 @@ export function evalNode(node, env, ctx, builtins) {
         }
       }
       if (matched) continue;
-      throw new RonmlError(`no case matches ${describeValue(v)} — add an arm, or _ => … to catch the rest`);
+      // A FAILED MATCH RAISES `Match` in Standard ML, and it is catchable:
+      // `fun hd (h::_) = h` applied to nil is how Harper introduces the
+      // exception. This threw a plain error instead, so `handle Match` had
+      // nothing to catch — the same gap v1.301 closed for Empty, Div and the
+      // rest, missed for this one because it is raised by the evaluator rather
+      // than by a primitive. The sentence still teaches; it rides along as the
+      // exception's `why`, exactly as the others do.
+      throw new RonmlRaise({
+        tag: 'con', name: 'Match', args: [],
+        why: `no case matches ${describeValue(v)} — add an arm, or _ => … to catch the rest`,
+      });
     }
     case 'Var': {
       const lower = nameKey(node.name);
