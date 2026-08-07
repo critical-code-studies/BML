@@ -46,8 +46,17 @@
 
   /* ---- banner ---- */
   h1 { position: absolute; left: -9999px; }
-  .banner { padding: 2.2rem 0 .3rem; white-space: pre-wrap; color: var(--glow); margin: 0; font: inherit; }
-  .banner .k { color: var(--dim); }
+  .banner {
+    padding: 2rem 0 .3rem; white-space: pre; overflow-x: auto; color: var(--glow);
+    margin: 0; font: inherit; line-height: 1.25;
+  }
+  /* The art is 55 columns. Below that the box would break, so it steps down
+     rather than wrapping into nonsense. */
+  @media (max-width: 30rem) { .banner { font-size: 10px; } }
+  /* A slot the width of its column at the BANNER's size, holding smaller text.
+     Without it the tiny version would drag the box's right border in with it. */
+  .banner .slot { display: inline-block; overflow: hidden; vertical-align: baseline; }
+  .banner .tiny { font-size: .62em; letter-spacing: .04em; opacity: .85; }
 
   /* ---- menu ---- */
   nav {
@@ -55,14 +64,15 @@
     margin: 1rem 0 0; padding: .3rem 0; border-top: 1px solid var(--rule);
     border-bottom: 1px solid var(--rule); font-size: 10.5px; letter-spacing: .04em;
   }
+  /* The menu is phosphor, like the banner: it is the machine's own writing
+     rather than anything you typed. */
   nav button, nav a.item, nav select {
-    font: inherit; background: transparent; color: var(--fg); cursor: pointer;
+    font: inherit; background: transparent; color: var(--glow); cursor: pointer;
     border: 1px solid transparent; border-radius: 2px; padding: .18rem .4rem;
     text-decoration: none;
   }
-  nav button:hover, nav a.item:hover, nav select:hover { color: var(--glow); border-color: var(--rule); }
+  nav button:hover, nav a.item:hover, nav select:hover { border-color: var(--glow); }
   nav .sp { flex: 1 1 auto; }
-  nav select { color: var(--dim); }
 
   /* ---- the terminal ----------------------------------------------------
      One scrolling surface. The prompt is the LAST LINE OF THE TRANSCRIPT
@@ -74,7 +84,7 @@
   }
   .bar {
     display: flex; gap: .55rem; align-items: center; flex-wrap: wrap;
-    padding: .35rem .65rem; border-bottom: 1px solid var(--rule);
+    padding: .35rem .65rem; border-top: 1px solid var(--rule);
     font-size: 12px; color: var(--dim);
   }
   .bar .sp { flex: 1 1 auto; }
@@ -107,10 +117,6 @@
     caret-color: var(--glow);
   }
   #in::placeholder { color: var(--dim); }
-  #blk { color: var(--glow); animation: blink 1.1s steps(1) infinite; }
-  #screen:focus-within #blk { animation: none; opacity: 0; }  /* the real caret takes over */
-  @keyframes blink { 50% { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { #blk { animation: none; } }
 
   /* ---- the program pane ---- */
   .prog { margin-top: 1.5rem; }
@@ -180,9 +186,7 @@
 
 <h1>BML, a little Standard ML</h1>
 
-<pre class="banner" id="banner">BML, a little Standard ML
-<span class="k">Created by David M. Berry, University of Sussex, 2026.
-Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.</span></pre>
+<pre class="banner" id="banner" aria-label="BML, a little Standard ML"></pre>
 
 <nav>
   <button data-open="m-about">about</button>
@@ -199,20 +203,19 @@ Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.</s
 </nav>
 
 <div class="term">
+  <div id="screen" aria-label="BML session" role="log" aria-live="polite">
+    <div id="live">
+      <span class="ps" aria-hidden="true">- </span>
+      <input id="in" autocomplete="off" autocapitalize="off" autocorrect="off"
+             spellcheck="false" aria-label="Type a declaration or an expression">
+      </div>
+  </div>
   <div class="bar">
     <label><input type="checkbox" id="strict" checked> strict</label>
     <span class="sp"></span>
     <button id="btn-help">help</button>
     <button id="btn-reset">reset</button>
     <button id="btn-clear">clear</button>
-  </div>
-  <div id="screen" aria-label="BML session" role="log" aria-live="polite">
-    <div id="live">
-      <span class="ps" aria-hidden="true">- </span>
-      <input id="in" autocomplete="off" autocapitalize="off" autocorrect="off"
-             spellcheck="false" aria-label="Type a declaration or an expression">
-      <span id="blk" aria-hidden="true">█</span>
-    </div>
   </div>
 </div>
 
@@ -231,11 +234,12 @@ JavaScript. The language is in <a href="https://github.com/critical-code-studies
 repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a terminal.</p></noscript>
 
 <footer>
-  <p>BML created by David M. Berry, University of Sussex, 2026. MIT licensed.</p>
+  <p>Created by David M. Berry, University of Sussex, 2026.<br>
+  Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.</p>
   <p>With thanks to Robert Harper for the inspiration in his <em>Introduction to
   Standard ML</em> (1986), and to Åke Wikström for <em>Functional Programming Using
   Standard ML</em> (1987).</p>
-  <p><code>npm install github:critical-code-studies/BML</code></p>
+  <p>MIT licensed · <code>npm install github:critical-code-studies/BML</code></p>
 </footer>
 
 </div>
@@ -424,8 +428,40 @@ const phos     = document.getElementById('phos');
 
 // The banner carries the version, so it is written rather than kept in step by
 // hand.
-document.getElementById('banner').firstChild.textContent =
-  `${BML_NAME} ${BML_VERSION}, a little Standard ML\n`;
+// THE BANNER IS BUILT HERE rather than written in the HTML, so the box closes
+// square whatever the version string is. Padding by hand is what put the right
+// border out of line the first time.
+//
+// The version is set in TINY type, which would pull the right border in with
+// it. So it sits in a slot that is a fixed number of columns wide AT THE BOX'S
+// OWN SIZE, with the small text inside: the slot holds the column open and the
+// border lands where it should.
+(() => {
+  const ART = [
+    '██████╗ ███╗   ███╗██╗',
+    '██╔══██╗████╗ ████║██║',
+    '██████╔╝██╔████╔██║██║',
+    '██╔══██╗██║╚██╔╝██║██║',
+    '██████╔╝██║ ╚═╝ ██║███████╗',
+    '╚═════╝ ╚═╝     ╚═╝╚══════╝',
+  ];
+  const VERSION_ROW = 3;
+  const SIDE = ['', '', 'a little Standard ML', `version ${BML_VERSION}`, '', ''];
+  const artW  = Math.max(...ART.map((a) => a.length));
+  const sideW = Math.max(...SIDE.map((t) => t.length));
+  const inner = 2 + artW + 3 + sideW + 1;
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  const rows = ART.map((a, k) => {
+    const left = '│  ' + a.padEnd(artW) + '   ';
+    if (k !== VERSION_ROW) return esc(left + SIDE[k].padEnd(sideW) + ' │');
+    return esc(left)
+      + `<span class="slot" style="width:${sideW}ch"><span class="tiny">${esc(SIDE[k])}</span></span>`
+      + esc(' │');
+  });
+  document.getElementById('banner').innerHTML =
+    [esc('┌' + '─'.repeat(inner) + '┐'), ...rows, esc('└' + '─'.repeat(inner) + '┘')].join('\n');
+})();
 
 // ---- the transcript ---------------------------------------------------------
 //
