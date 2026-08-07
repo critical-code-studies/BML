@@ -963,3 +963,107 @@ test('a val alias is not recursive; a fun is', () => {
   bml.run('fun count n = if n = 0 then 0 else count (n - 1)');
   assert.equal(bml.typeReport('count'), 'int -> int', 'and a fun still sees itself');
 });
+
+// ---- `;` between declarations (v1.307) --------------------------------------
+
+test('a semicolon separates declarations at the top level', () => {
+  // `;` means two things in Standard ML and this build implemented one: the
+  // expression sequence inside parentheses. The `;` loop ran everywhere, so at
+  // the top level it ate a `;` that was never its own — `val p = 1; val q = 2`
+  // read the `;` as a sequence, took `val q` for an expression, and asked for
+  // the `in` a `let` would need.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  assert.equal(bml.run('val p = 1; val q = 2').text, 'val p = 1\nval q = 2');
+  assert.equal(bml.run('p + q').text, '3');
+  // Sequential, so each may use the names before it. A bare `Decls` is an
+  // and-chain and those are simultaneous.
+  bml.run('val a1 = 1; val a2 = a1 + 1; val a3 = a2 + 1');
+  assert.equal(bml.run('a3').text, '3');
+});
+
+test('a semicolon may terminate a declaration', () => {
+  // Standard ML's own texts end nearly every line this way, and it reached
+  // eat('EOF') and was reported there.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  assert.equal(bml.run('val zz = 5;').text, 'val zz = 5');
+  assert.equal(bml.run('open List;').ok, true);
+  assert.equal(bml.run('1 + 1;').text, '2');
+});
+
+test('a semicolon separates declarations inside a block too', () => {
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  assert.equal(bml.run('structure S7 = struct val a = 1; val b = 2 end').ok, true);
+  assert.equal(bml.run('S7.b').text, '2');
+  assert.equal(bml.run('local val h = 1; val g = 2 in val sh = h + g end').ok, true);
+  assert.equal(bml.run('sh').text, '3');
+  assert.equal(bml.run('abstype q7 = Q7 of int with fun mk7 n = Q7 n; fun get7 (Q7 n) = n end').ok, true);
+  assert.equal(bml.run('get7 (mk7 5)').text, '5');
+  assert.equal(bml.run('structure S6 = struct val a = 1; end').ok, true, 'a trailing one too');
+});
+
+test('a semicolon inside parentheses still SEQUENCES, as it always did', () => {
+  // The shapes that were at risk, checked one by one rather than by watching a
+  // suite go green: the game writes `(echo n ; go (n - 1))` in three places.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  bml.run('val i = ref 0');
+  assert.equal(bml.run('(1; 2; 3)').text, '3');
+  assert.equal(bml.run('(if true then 1 else 2; 7)').text, '7');
+  assert.equal(bml.run('let val a = 1 in a; a + 1 end').text, '2', 'a let body, without parentheses');
+  assert.equal(bml.run('(i := 0; while !i < 3 do (i := !i + 1; ()); !i)').text, '3', 'inside a loop');
+});
+
+test('a run of declarations is seen by the CHECKER, not just the evaluator', () => {
+  // `Decls` had no case in the checker at all, so `remember` was never told
+  // what the names are: the evaluator bound them and the checker did not, and
+  // under strict — the command line's default — `val u = 1 and v = 2` declared
+  // two names and then refused both the moment you used one.
+  //
+  // It pre-dates the `;` work by some versions. Routing `;` through the same
+  // node is what made it visible.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('val u = 1 and v = 2');
+  assert.equal(bml.run('u + v').text, '3', 'an and-chain');
+  bml.run('fun ev n = n = 0 and od n = n = 1');
+  assert.equal(bml.run('ev 0').text, 'true');
+  bml.run('val p2 = 1; val q2 = 2');
+  assert.equal(bml.run('p2 + q2').text, '3', 'and a semicolon run');
+  assert.equal(bml.typeReport('p2'), 'int');
+});
+
+test('a later declaration in a run sees what the earlier ones declared', () => {
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('datatype col = R | G; val z = R');
+  assert.equal(bml.typeReport('z'), 'col', 'the datatype was registered before the val');
+  bml.run('type ct = int; val w : ct = 5');
+  assert.equal(bml.typeReport('w'), 'int', 'and so was the abbreviation');
+  bml.run('structure Sx = struct val k = 1 end; val kk = Sx.k');
+  assert.equal(bml.typeReport('kk'), 'int', 'and the structure');
+});
+
+test('a clash anywhere in a run refuses the whole line', () => {
+  // StructDecl catches a member that will not type, because a structure is not
+  // all-or-nothing. Copying that here was wrong: a top-level run must refuse
+  // exactly as the declaration would if it stood alone.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.run('type ct2 = int; val w2 : ct2 = "s"').ok, false, 'clash in the second');
+  assert.equal(bml.run('val bad : int = "s"; val ok2 = 1').ok, false, 'clash in the first');
+  assert.equal(bml.run('val g1 = 1; val g2 = 2').ok, true, 'and a good run still runs');
+});
+
+test('a run reports one type per declaration', () => {
+  // Reporting the run's own type printed `val q = 2 : unit`, which says the
+  // wrong thing about q.
+  const bml = createInterpreter({ typecheck: 'report', printing: 'sml' });
+  bml.loadPrelude();
+  const ty = bml.typeReport('val p3 = 1; val q3 = "a"');
+  assert.equal(ty, 'int\nstring');
+  assert.deepEqual(smlEcho(bml.run('val p3 = 1; val q3 = "a"').text, ty),
+    ['val p3 = 1 : int', 'val q3 = "a" : string']);
+});

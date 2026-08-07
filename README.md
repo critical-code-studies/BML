@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.12.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.13.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.12.0, a little Standard ML
+BML 0.13.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -75,7 +75,7 @@ read the same `map` you would have written.
 
 It is measured rather than described, two ways. Against the 32 example files
 from Robert Harper's *Introduction to Standard ML* course, this build runs
-**338 of 408 top-level declarations (83%)** as written, with no translation:
+**344 of 408 top-level declarations (84%)** as written, with no translation:
 
 ```
 node tools/isml-conformance.mjs

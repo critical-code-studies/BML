@@ -35,6 +35,22 @@ export function smlEcho(text, ty) {
   // No type to show (the checker is off, or it could not say): print as before.
   if (!ty || ty.startsWith('TYPE:')) return [text];
   const [tyOnly, warn] = ty.split('    WARNING: ');
+  // A RUN OF DECLARATIONS: one answer line and one type per declaration, paired
+  // up. `val p = 1; val q = 2` is two bindings, and giving the pair a single
+  // type printed `val q = 2 : unit`.
+  const answers = text.split('\n');
+  const types = tyOnly.split('\n');
+  if (types.length > 1) {
+    // Pair them only when they line up. A declaration that binds no value
+    // echoes nothing, so a run of them can leave fewer answers than types —
+    // and appending a multi-line type to a single answer reads as nonsense.
+    // Better to print what happened and say nothing about its type.
+    if (answers.length === types.length) {
+      const lines = answers.map((a, i) => smlEcho(a, types[i])[0]);
+      return warn ? [...lines, `  WARNING: ${warn}`] : lines;
+    }
+    return warn ? [text, `  WARNING: ${warn}`] : [text];
+  }
   // A datatype, a signature, a structure or a functor declaration binds a TYPE
   // or a module, not a value, so Standard ML reports no value type for it.
   // Printing `datatype colour = Red | Green : unit` invited the reading that

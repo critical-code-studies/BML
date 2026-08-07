@@ -732,6 +732,55 @@ export function infer(node, env, cons) {
       return UNIT;
     }
 
+    // A RUN OF DECLARATIONS. `val u = 1 and v = 2`, and since v1.307 also
+    // `val p = 1; val q = 2`. There was no case for it AT ALL, so it took the
+    // fresh-variable default and `remember` was never told what either name is
+    // — the evaluator bound them and the checker did not, which under strict
+    // meant `val u = 1 and v = 2` declared two names and then refused both the
+    // moment you used one. Pre-dates the `;` work; routing `;` through the same
+    // node is what made it visible.
+    //
+    // Each item's type is left on the item, the way StructDecl leaves its
+    // members, because `remember` is where the session learns anything.
+    case 'Decls': {
+      let inner = { ...env };
+      for (const d of node.items || []) {
+        if (!d) continue;
+        {
+          // NO try/catch here, deliberately. StructDecl has one — a structure
+          // is not all-or-nothing, and one member the checker cannot type does
+          // not spoil the rest — and copying it here was wrong: a clash in one
+          // declaration of a top-level run must refuse the LINE, exactly as it
+          // would if the declaration stood alone. With the catch,
+          // `type ct = int; val w : ct = "s"` ran.
+          const t = infer(d, inner, cons);
+          d.__t = t;
+          // SEQUENTIAL runs (`;`, and an abstype with-block) let each item see
+          // what the ones before it declared. An `and`-chain is simultaneous,
+          // so it does not.
+          if (node.sequential) {
+            if (d.type === 'TopLet') {
+              inner = { ...inner, [nameKey(d.name)]: generalise(env, t) };
+            } else if (d.type === 'Datatype' || d.type === 'TypeAbbrev' || d.type === 'StructDecl') {
+              // A DECLARATION THAT INTRODUCES NAMES rather than a value.
+              // `datatype c = R; val z = R` has to know what R is by the time
+              // it reaches the second item, or z reports the fallback. Run the
+              // same `remember` the session would, into a scratch one, and take
+              // what it worked out.
+              const scratch = {};
+              try { remember(d, scratch, t); } catch { /* not this module's */ }
+              for (const k of Object.keys(scratch.__contypes || {})) cons[k] = scratch.__contypes[k];
+              for (const k of Object.keys(scratch.__datacons || {})) CURRENT_DATACONS[k] = scratch.__datacons[k];
+              for (const k of Object.keys(scratch.__conarity || {})) CURRENT_CONARITY[k] = scratch.__conarity[k];
+              for (const k of Object.keys(scratch.__abbrevs || {})) CURRENT_ABBREVS[k] = scratch.__abbrevs[k];
+              for (const k of Object.keys(scratch.__types || {})) inner[k] = scratch.__types[k];
+            }
+          }
+        }
+      }
+      return UNIT;
+    }
+
     case 'StructDecl': case 'FunctorDecl': {
       const inner = { ...env };
       const members = {};
@@ -869,6 +918,14 @@ export function typeOf(ast, session = {}) {
   CURRENT_CONARITY = session.__conarity || {};
   try {
     const t = infer(ast, env, cons);
+    // A RUN OF DECLARATIONS reports one type PER DECLARATION, because that is
+    // what it is: `val p = 1; val q = 2` is two bindings and Standard ML gives
+    // each its own line. Reporting the run's own type instead printed
+    // `val q = 2 : unit`, which says the wrong thing about q.
+    if (ast.type === 'Decls' && (ast.items || []).length > 1) {
+      const each = ast.items.map((d) => (d && d.__t !== undefined ? show(d.__t) : 'unit'));
+      return { ok: true, type: each.join('\n'), t, warnings: WARNINGS.slice() };
+    }
     return { ok: true, type: show(t), t, warnings: WARNINGS.slice() };
   } catch (e) {
     if (e instanceof TypeError_) return { ok: false, error: e.message };
@@ -926,6 +983,11 @@ export function remember(ast, session, t) {
     // `List.map` is ONE Var node whose name contains a dot, not a selection.
     for (const k of Object.keys(ast.__members)) {
       session.__types[`${nameKey(ast.name)}.${k}`] = ast.__members[k];
+    }
+  } else if (ast.type === 'Decls') {
+    // Each item on its own, with the type `infer` left on it above.
+    for (const d of ast.items || []) {
+      if (d && d.__t !== undefined) remember(d, session, d.__t);
     }
   } else if (ast.type === 'TypeAbbrev' && ast.rhs) {
     if (!session.__abbrevs) session.__abbrevs = {};

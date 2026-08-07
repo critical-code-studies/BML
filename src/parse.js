@@ -94,6 +94,21 @@ export function parse(toks, fixityIn) {
   // caller's session until the declaration is actually evaluated.
   const fixity = { ...(fixityIn || defaultFixity()) };
   let inBlock = 0;      // >0 while inside local/struct: `in` and `end` are the block's
+  // >0 while inside `( … )` or a `let … in HERE end` body — the two places a
+  // `;` SEQUENCES EXPRESSIONS. At the top level it means something else: it
+  // separates and terminates DECLARATIONS, and the one `;` loop this parser has
+  // was running everywhere, so `val p = 1; val q = 2` read the `;` as a
+  // sequence, took `val q` for an expression and asked for the `in` that a
+  // `let` would need.
+  let seqDepth = 0;
+  const inSeq = (f) => { seqDepth++; try { return f(); } finally { seqDepth--; } };
+  // A `;` BETWEEN DECLARATIONS in a block body — `struct val a = 1; val b = 2
+  // end`, and the same inside `local` and an abstype with-block. Standard ML
+  // allows it and the corpus writes it; these loops read one declaration after
+  // another and had nowhere for the token to go, so it reported as unexpected.
+  // The top level takes the same view (see the end of parse); this is that rule
+  // one level down.
+  const eatDeclSemis = () => { while (peek().t === 'SEMI') p++; };
   const peek = () => toks[p];
   const eat = (t) => {
     if (toks[p].t !== t) throw new RonmlError(`expected ${t.toLowerCase()}, got '${toks[p].v ?? toks[p].t}'`);
@@ -229,7 +244,7 @@ export function parse(toks, fixityIn) {
       const ann = parseTypeExpr();
       left = { type: 'Annot', expr: left, ann, params: 0 };
     }
-    while (peek().t === 'SEMI') {
+    while (seqDepth > 0 && peek().t === 'SEMI') {
       p++;
       if (peek().t === 'RP' || peek().t === 'EOF' || peek().t === 'RB') break; // trailing ; is fine
       left = { type: 'Seq', left, right: parseHandle() };
@@ -293,7 +308,7 @@ export function parse(toks, fixityIn) {
         const value = parseExpr();
         if (isKeyword(peek(), 'in')) {
           p++;
-          const body = parseExpr();
+          const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
           // …and its `end`, which the name-binding path already ate. Without
           // this, `let val (d, a, b) = … in … end` parsed to the body and then
           // reported the `end` as unexpected — which reads as a broken `let`
@@ -338,7 +353,7 @@ export function parse(toks, fixityIn) {
       if (extra.length) {
         if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after the bindings");
         p++;
-        const body = parseExpr();
+        const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
         if (isKeyword(peek(), 'end')) p++;
         // ONE scope for all of them, not a nest of scopes. Nesting made
         // `let fun e … and o2 … in e 4 end` build Let(e, Let(o2, body)), so e's
@@ -350,7 +365,7 @@ export function parse(toks, fixityIn) {
       }
       if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let k = hack OB_XXXX in crash OB_XXXX k");
       p++;
-      const body = parseExpr();
+      const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
       if (isKeyword(peek(), 'end')) p++;      // SML closes a local block with `end`
       return { type: 'Let', name: nameTok.v, value, body };
     }
@@ -703,7 +718,7 @@ export function parse(toks, fixityIn) {
     if (tok.t === 'LP') {
       p++;
       if (peek().t === 'RP') { p++; return { type: 'Unit' }; }
-      const e = parseExpr();
+      const e = inSeq(parseExpr);
       if (peek().t === 'COLON') { p++; const ann = parseTypeExpr(); eat('RP'); return { type: 'Annot', expr: e, ann, params: 0 }; }
       // (e) is just e; (e1, e2, ...) is a tuple. Harper introduces tuples
       // before lists (1993, s.2.2.6) because they are the simpler compound:
@@ -1026,10 +1041,10 @@ export function parse(toks, fixityIn) {
       p++;
       const hidden = [];
       inBlock++;
-      while (!isKeyword(peek(), 'in') && peek().t !== 'EOF') hidden.push(parseTop());
+      while (eatDeclSemis(), !isKeyword(peek(), 'in') && peek().t !== 'EOF') { hidden.push(parseTop()); }
       if (isKeyword(peek(), 'in')) p++;
       const shown = [];
-      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') shown.push(parseTop());
+      while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { shown.push(parseTop()); }
       inBlock--;
       if (isKeyword(peek(), 'end')) p++;
       return { type: 'Local', hidden, shown };
@@ -1076,7 +1091,7 @@ export function parse(toks, fixityIn) {
       p++;
       const decls = [];
       inBlock++;
-      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') decls.push(parseTop());
+      while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { decls.push(parseTop()); }
       inBlock--;
       if (isKeyword(peek(), 'end')) p++;
       return { type: 'FunctorDecl', name: nameTok.v, param, decls };
@@ -1100,7 +1115,7 @@ export function parse(toks, fixityIn) {
       const items = [dt];
       if (isKeyword(peek(), 'with')) {
         p++;
-        while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') items.push(parseTopOne());
+        while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { items.push(parseTopOne()); }
         if (isKeyword(peek(), 'end')) p++;
       }
       // SEQUENTIAL, not simultaneous. `Decls` is also what an `and`-chain
@@ -1144,7 +1159,7 @@ export function parse(toks, fixityIn) {
             p++;
             const inlineDecls = [];
             inBlock++;
-            while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') inlineDecls.push(parseTop());
+            while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { inlineDecls.push(parseTop()); }
             inBlock--;
             if (isKeyword(peek(), 'end')) p++;
             eat('RP');
@@ -1160,7 +1175,7 @@ export function parse(toks, fixityIn) {
       p++;
       const decls = [];
       inBlock++;
-      while (!isKeyword(peek(), 'end') && peek().t !== 'EOF') decls.push(parseTop());
+      while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { decls.push(parseTop()); }
       inBlock--;
       if (isKeyword(peek(), 'end')) p++;
       return { type: 'StructDecl', name: nameTok.v, ascribe, decls };
@@ -1234,7 +1249,7 @@ export function parse(toks, fixityIn) {
         const value = parseExpr();
         if (isKeyword(peek(), 'in')) {
           p++;
-          const body = parseExpr();
+          const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
           // …and its `end`, which the name-binding path already ate. Without
           // this, `let val (d, a, b) = … in … end` parsed to the body and then
           // reported the `end` as unexpected — which reads as a broken `let`
@@ -1285,7 +1300,7 @@ export function parse(toks, fixityIn) {
       }
       if (!inBlock && isKeyword(peek(), 'in')) {
         p++;
-        const body = parseExpr();
+        const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
         if (isKeyword(peek(), 'end')) p++;
         // ONE scope, as in the inner let parser above. There are TWO paths that
         // parse a multi-binding `let` — this is the top-level one, which is
@@ -1309,6 +1324,25 @@ export function parse(toks, fixityIn) {
     p++;
     const ann = parseTypeExpr();
     expr = { type: 'Annot', expr, ann, params: 0 };
+  }
+  // `;` BETWEEN AND AFTER DECLARATIONS. At the top level it is a separator and
+  // a terminator, not an expression sequence — `val p = 1; val q = 2` declares
+  // two things, and `open List;` is one declaration with a full stop after it.
+  // Standard ML's own texts end nearly every line this way, and the parser had
+  // no case for it: the `;` was eaten by whatever expression happened to be
+  // being read, or reached `eat('EOF')` and was reported there.
+  if (peek().t === 'SEMI') {
+    const items = [expr];
+    while (peek().t === 'SEMI') {
+      p++;
+      if (peek().t === 'EOF') break;    // a terminating `;`, with nothing after it
+      items.push(parseTop());
+    }
+    // SEQUENTIAL, and marked, because a bare `Decls` means an `and`-chain and
+    // those are simultaneous (v1.299). These run in order and each may use the
+    // names declared before it, which is the whole point of writing them on one
+    // line.
+    if (items.length > 1) expr = { type: 'Decls', items, sequential: true };
   }
   eat('EOF');
   return expr;
