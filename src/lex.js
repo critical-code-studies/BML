@@ -17,7 +17,14 @@ const SYMBOLIC = /[!%&$#+\-/:<=>?@\\~^|*]/;
 // Standard ML's and left out this dialect's own `==` and `!=`, so `4 == 4`
 // lexed as a symbolic NAME and twenty tests went red at once.
 const KNOWN_SYMBOLIC = new Set([
-  '::', ':=', ':>', '<=', '<>', '==', '=>', '>=', '|>', '!=', '->', '..', '**',
+  '::', ':=', ':>', '<=', '<>', '==', '=>', '>=', '|>', '!=', '->', '..',
+  // `**` WAS here and should not have been. Every other entry is a spelling
+  // this lexer or parser gives its own token to — `::` is CONS, `->` is MINUS
+  // GT read as a type arrow, and so on — but nothing has ever handled `**`. So
+  // it was excluded from the symbolic path without being a token either, and
+  // `fun ** (a, b) = a * b` failed on an unexpected STAR: a name nobody could
+  // bind and nothing could use. Standard ML has no `**` operator either; it is
+  // an ordinary symbolic identifier there, and it is one here now.
 ]);
 
 // ---- Tokenizer --------------------------------------------------------

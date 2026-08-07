@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.11.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.12.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -33,7 +33,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.11.0, a little Standard ML
+BML 0.12.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -54,10 +54,15 @@ ERR: string and int are not the same type
 ## What is here
 
 The core language: `val`, `fun` (clausal, curried, tuple-argument), `fn`, `let`,
-`case`, `datatype` with type variables, `abstype`, `withtype`, records, tuples,
-exceptions (raised, handled, and the standard ones catchable by name), mutable
-references, `while … do`, `local`, `open`, and `infix`/`infixr`/`nonfix`/`op`.
-Modules: `structure`, `signature`, and generative functors.
+`case`, `datatype` with type variables, `abstype`, `withtype`, type
+abbreviations, records, tuples, `as` patterns, exceptions (raised, handled, and
+the standard ones catchable by name), mutable references, `while … do`,
+`local`, `open`, and `infix`/`infixr`/`nonfix`/`op`. Modules: `structure`,
+`signature` with transparent and opaque ascription, `sharing type`,
+`where type`, and generative functors.
+
+Identifiers are case-sensitive, as Standard ML's are: `foo` and `Foo` are two
+names.
 
 Tail calls are proper, as the Definition requires, so an accumulator loop or a
 continuation-passing program runs to whatever depth the step budget allows
@@ -68,13 +73,25 @@ the value restriction, with exhaustiveness warnings on `case`. The Basis subset
 is written in BML itself and loaded as source, so you can open `src/basis.js` and
 read the same `map` you would have written.
 
-It is measured rather than described. Against the 32 example files from Robert
-Harper's *Introduction to Standard ML* course, this build runs **329 of 399
-top-level declarations (82%)** as written, with no translation:
+It is measured rather than described, two ways. Against the 32 example files
+from Robert Harper's *Introduction to Standard ML* course, this build runs
+**338 of 408 top-level declarations (83%)** as written, with no translation:
 
 ```
 node tools/isml-conformance.mjs
 ```
+
+And against a checklist of the Definition — 82 features, one case each, passing
+only on an exact match — it scores **82/82**:
+
+```
+node tools/sml-checklist.mjs
+```
+
+The corpus is the figure to trust, being somebody else's programs rather than a
+list written here; the checklist catches what the corpus happens not to use.
+Harper's files contain no `while` and no arrays, so the corpus had nothing to
+say about either while both were missing.
 
 That corpus is Harper's teaching material. The harness fetches it on first run
 into a gitignored cache; it is **not** in this repository and is not
@@ -164,10 +181,14 @@ The gaps are catalogued rather than described, in a register that a test walks
 so that fixing one turns the test red and names the entry to delete. About 18%
 of Harper's corpus still does not run as written.
 
-A type ABBREVIATION is not resolved: `type 'a syn = 'a list` then
-`val c : int syn = [1, 2]` is accepted rather than checked, because the checker
-has no record of what `syn` abbreviates. Deliberately permissive — a wrong
-rigid type refuses correct programs, where a variable only under-reports.
+The Basis is 16 structures of roughly 47: `List` `String` `Char` `Int` `Real`
+`Bool` `Option` `ListPair` `Math` `Array` `Vector` `Word` `Substring` `General`
+`TextIO` `IO`. There is no `OS`, and there is not going to be one: nothing sits
+behind this that has a file system or processes.
+
+`Word` is an int that prints in hex rather than a real fixed-width word — no
+wrap-around, no unsigned division — and a `Substring` is the string it denotes
+rather than a window onto a base. Both are said here rather than discovered.
 
 Nothing in the Basis outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`,
 `Option`, `ListPair`. Identifiers are lower-cased, which Standard ML does not

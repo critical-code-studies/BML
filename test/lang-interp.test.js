@@ -835,3 +835,131 @@ test('while … do is unit, not a fresh variable', () => {
   assert.equal(bml.typeReport('while false do ()'), 'unit');
   assert.equal(bml.typeReport('while !i < 3 do i := !i + 1'), 'unit');
 });
+
+// ---- `as` binds loosest of all pattern forms (v1.306) -----------------------
+
+test('`as` names the whole pattern, not the first thing in it', () => {
+  // D-57. `as` was handled at the ATOM level, so `w as h :: t` read as
+  // `(w as h) :: t` and `w` named the HEAD. Silent, and the more so because
+  // parenthesising it gave the right answer, so the feature looked present.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  assert.equal(bml.run('case [1,2] of w as h :: _ => (w, h)').text, '([1, 2], 1)');
+  // The one that answered quietly wrong rather than failing:
+  assert.equal(bml.run('case [1,2] of w as h :: _ => length w').text, '2');
+  assert.equal(bml.run('case [1,2] of w as (h :: _) => (w, h)').text, '([1, 2], 1)', 'parenthesised too');
+  bml.run('fun g (w as h :: _) = (w, h)');
+  assert.equal(bml.run('g [1,2,3]').text, '([1, 2, 3], 1)', 'and in a fun clause');
+  assert.equal(bml.run('case (1,2) of w as (a, b) => (w, a + b)').text, '((1, 2), 3)', 'over a tuple');
+  assert.equal(bml.run('case [[1,2]] of outer as (inner as (x :: _)) :: _ => (outer, inner, x)').text,
+    '([[1, 2]], [1, 2], 1)', 'nested');
+});
+
+// ---- type abbreviations are resolved (v1.306) -------------------------------
+
+test('an abbreviation is expanded, so an annotation using one is checked', () => {
+  // `type 'a syn = 'a list` was read and dropped, on the reasoning that
+  // inference works structurally and does not need the name. True of inference,
+  // false of ANNOTATIONS, which is the one place a type name appears — so
+  // `val y : int syn = 5` was accepted, `int syn` having become a variable that
+  // unifies with anything.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run("type 'a syn = 'a list");
+  bml.run('type count = int');
+  bml.run("type ('a,'b) both = 'a * 'b");
+  bml.run('type link = {url : string, n : int}');
+  for (const good of ['val a : int syn = [1,2]', 'val c : count = 5',
+                      'val e : (int,string) both = (1,"a")', 'val g : link = {url = "x", n = 1}']) {
+    assert.equal(bml.run(good).ok, true, `${good}: ${bml.run(good).text}`);
+  }
+  for (const bad of ['val b : int syn = 5', 'val d : count = "x"',
+                     'val f : (int,string) both = (1,2)', 'val h : link = {url = 1, n = 1}']) {
+    assert.equal(bml.run(bad).ok, false, `${bad} should be refused`);
+  }
+});
+
+test('a record type can be written, in an abbreviation or an annotation', () => {
+  // parseTypeExpr had no case for `{a : int}` while skipTypeExpr counted
+  // braces, so the two disagreed and nothing noticed until an abbreviation's
+  // right-hand side was parsed rather than skipped.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  assert.equal(bml.run('val c : {p : int} = {p = 5}').ok, true);
+  assert.equal(bml.run('val d : {p : int} = {p = "s"}').ok, false);
+});
+
+// ---- names are case-sensitive, as Standard ML's are (v1.306) ----------------
+
+test('foo and Foo are two names', () => {
+  // Every identifier was lower-cased, so this left ONE name holding 2. The
+  // convention that constructors are capitalised and variables are not is a
+  // convention only because the two can differ.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.run('val foo = 1');
+  bml.run('val Foo = 2');
+  assert.equal(bml.run('foo').text, '1');
+  assert.equal(bml.run('Foo').text, '2');
+});
+
+test('a keyword is lower-case and nothing else', () => {
+  // `IF` is an ordinary name in Standard ML, not the keyword.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  assert.equal(bml.run('val IF = 5').ok, true, 'IF is a name you may bind');
+  assert.equal(bml.run('IF').text, '5');
+  assert.equal(bml.run('if true then 1 else 2').text, '1', 'and the keyword still works');
+});
+
+test('a structure name is case-sensitive too', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('List.length [1]').text, '1');
+  assert.equal(bml.run('list.length [1]').ok, false, 'list is not List');
+});
+
+test('exception Size can exist alongside the size function', () => {
+  // It could not while names were folded: one name, and declaring the
+  // exception shadowed the function. Five tests went red on that single line.
+  const bml = createInterpreter({ typecheck: 'off', printing: 'sml' });
+  bml.loadPrelude();
+  assert.equal(bml.run('size "abc"').text, '3', 'the function');
+  assert.equal(bml.run('Array.array (~1, 0) handle Size => Array.fromList []').text, '[||]', 'the exception');
+});
+
+test('a host may ask for folding, and NostOS does', () => {
+  // The game's terminals are 1980s machines: a player types HACK OB_1A2B as
+  // readily as hack ob_1a2b. So it is a host policy, like the unbound-name
+  // hooks, rather than something baked into the language.
+  const folded = createInterpreter({ typecheck: 'off', printing: 'sml', names: 'fold' });
+  folded.run('val bar = 1');
+  folded.run('val Bar = 2');
+  assert.equal(folded.run('bar').text, '2', 'folded: one name, the later binding wins');
+  assert.equal(folded.run('IF true then 1 else 2').text, '1', 'folded: a keyword in caps is the keyword');
+});
+
+test('the new Basis primitives have types, not fresh variables', () => {
+  // A primitive missing from the checker's base environment takes the
+  // unknown-name path, so `Math.sqrt 4.0` reported `'a` for a value that is a
+  // real and nothing else. The list of primitive types is the fifth list in
+  // this project to go stale behind an addition.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  assert.equal(bml.typeReport('Math.sqrt'), 'real -> real');
+  assert.equal(bml.typeReport('Math.sqrt 4.0'), 'real');
+  assert.equal(bml.typeReport('ceil 1.2'), 'int');
+  assert.equal(bml.typeReport('Array.fromList [1,2,3]'), 'int array');
+  assert.equal(bml.typeReport('Array.sub (Array.fromList [1,2,3], 1)'), 'int');
+  assert.equal(bml.typeReport('Vector.fromList [1]'), 'int vector');
+  assert.equal(bml.typeReport('Char.ord'), 'char -> int');
+});
+
+test('a val alias is not recursive; a fun is', () => {
+  // Both arrive as TopLet and the difference is that `fun` parses to a Lam.
+  // Pre-binding the name for a plain `val` made an ALIAS self-referential:
+  // `val sqrt = sqrt` read the right-hand side as the one being declared.
+  const bml = createInterpreter({ typecheck: 'report' });
+  bml.loadPrelude();
+  bml.run('val mysqrt = sqrt');
+  assert.equal(bml.typeReport('mysqrt'), 'real -> real', 'the alias sees the outer name');
+  bml.run('fun count n = if n = 0 then 0 else count (n - 1)');
+  assert.equal(bml.typeReport('count'), 'int -> int', 'and a fun still sees itself');
+});

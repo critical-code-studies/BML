@@ -108,4 +108,151 @@ export const PRIMITIVES = {
   max: { arity: 2, fn: ([a, b]) => { if (!a || !numericTag(a) || !b || !numericTag(b)) throw new RonmlError('max needs two numbers'); return { tag: a.tag, v: Math.max(a.v, b.v) }; } },
   size: { arity: 1, fn: ([x]) => { if (x && x.tag === 'str') return { tag: 'int', v: x.v.length }; if (x && x.tag === 'list') return { tag: 'int', v: x.items.length }; throw new RonmlError(`${describeValue(x)} has no size`); } },
   ref: { arity: 1, fn: ([v]) => ({ tag: 'ref', cell: { v } }) },
+
+  // ---- arrays and vectors --------------------------------------------------
+  //
+  // The only Basis types that cannot be built out of what the language has.
+  // A list is immutable and copied, so `Array.update` written over a list would
+  // be O(n) AND would not update anything anyone else is holding — which is the
+  // entire point of an array. They need a real mutable place, so they are a
+  // value tag of their own with a JavaScript array inside.
+  //
+  // Vector shares the machinery and differs in one rule, enforced by having no
+  // update primitive at all rather than by checking a flag: there is no way to
+  // write into one.
+  arraymk: {
+    arity: 2,
+    fn: ([n, init]) => {
+      if (!n || n.tag !== 'int') throw new RonmlError(`${describeValue(n)} is not a length`);
+      if (n.v < 0) raiseStd('Size', `Array.array: ${n.v} is not a length. An array cannot be shorter than nothing.`);
+      return { tag: 'array', items: new Array(n.v).fill(init) };
+    },
+  },
+  arrayfromlist: {
+    arity: 1,
+    fn: ([l]) => {
+      if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`);
+      return { tag: 'array', items: l.items.slice() };
+    },
+  },
+  arraysub: {
+    arity: 2,
+    fn: ([a, i]) => {
+      if (!a || (a.tag !== 'array' && a.tag !== 'vector')) throw new RonmlError(`${describeValue(a)} is not an array`);
+      if (!i || i.tag !== 'int') throw new RonmlError(`${describeValue(i)} is not an index`);
+      if (i.v < 0 || i.v >= a.items.length) {
+        raiseStd('Subscript', `sub: ${i.v} is outside an array of ${a.items.length}. The first is 0.`);
+      }
+      return a.items[i.v];
+    },
+  },
+  arrayupdate: {
+    arity: 3,
+    fn: ([a, i, v]) => {
+      if (!a || a.tag !== 'array') throw new RonmlError(`${describeValue(a)} cannot be updated`);
+      if (!i || i.tag !== 'int') throw new RonmlError(`${describeValue(i)} is not an index`);
+      if (i.v < 0 || i.v >= a.items.length) {
+        raiseStd('Subscript', `update: ${i.v} is outside an array of ${a.items.length}. The first is 0.`);
+      }
+      a.items[i.v] = v;
+      return { tag: 'unit' };
+    },
+  },
+  arraylength: {
+    arity: 1,
+    fn: ([a]) => {
+      if (!a || (a.tag !== 'array' && a.tag !== 'vector')) throw new RonmlError(`${describeValue(a)} is not an array`);
+      return { tag: 'int', v: a.items.length };
+    },
+  },
+  arraytolist: {
+    arity: 1,
+    fn: ([a]) => {
+      if (!a || (a.tag !== 'array' && a.tag !== 'vector')) throw new RonmlError(`${describeValue(a)} is not an array`);
+      return { tag: 'list', items: a.items.slice() };
+    },
+  },
+  vectorfromlist: {
+    arity: 1,
+    fn: ([l]) => {
+      if (!l || l.tag !== 'list') throw new RonmlError(`${describeValue(l)} is not a list`);
+      return { tag: 'vector', items: l.items.slice() };
+    },
+  },
+
+  // ---- what Math needs -----------------------------------------------------
+  //
+  // `sqrt` was already here; the rest are the same shape. Written as primitives
+  // rather than in BML because there is no way to compute a sine from the
+  // arithmetic the language has, and a teaching implementation that cannot do
+  // trigonometry cannot follow a textbook past chapter three.
+  sin: mathfn('sin', Math.sin),
+  cos: mathfn('cos', Math.cos),
+  tan: mathfn('tan', Math.tan),
+  asin: mathfn('asin', Math.asin),
+  acos: mathfn('acos', Math.acos),
+  atan: mathfn('atan', Math.atan),
+  exp: mathfn('exp', Math.exp),
+  ln: mathfn('ln', Math.log),
+  log10: mathfn('log10', Math.log10),
+  sinh: mathfn('sinh', Math.sinh),
+  cosh: mathfn('cosh', Math.cosh),
+  tanh: mathfn('tanh', Math.tanh),
+  // TWO ARGUMENTS, and named apart from the Basis on purpose. A primitive of
+  // arity 2 is CURRIED here, while `Math.pow` takes a tuple — and a structure
+  // member shadows a top-level name of the same spelling, so `fun pow (x, y) =
+  // pow x y` inside `structure Math` calls itself until the budget runs out.
+  // That is the `makestring` lesson from v1.296, and it cost a debugging round
+  // then. So the primitive is `mathpow` and `Math.pow` wraps it.
+  mathatan2: {
+    arity: 2,
+    fn: ([a, b]) => {
+      if (!numericTag(a) || !numericTag(b)) throw new RonmlError('atan2 needs two numbers');
+      return { tag: 'real', v: Math.atan2(a.v, b.v) };
+    },
+  },
+  mathpow: {
+    arity: 2,
+    fn: ([a, b]) => {
+      if (!numericTag(a) || !numericTag(b)) throw new RonmlError('pow needs two numbers');
+      return { tag: 'real', v: Math.pow(a.v, b.v) };
+    },
+  },
+
+  // ---- rounding, the other three -------------------------------------------
+  // `floor` was here alone. Standard ML has four, and they differ at the
+  // halfway case and on negatives, which is exactly where somebody checking a
+  // textbook answer will look.
+  ceil: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'int', v: Math.ceil(n.v) }; } },
+  trunc: { arity: 1, fn: ([n]) => { if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`); return { tag: 'int', v: Math.trunc(n.v) }; } },
+  // Standard ML rounds to EVEN at a half, which JavaScript's Math.round does
+  // not: Math.round(0.5) is 1 and Math.round(2.5) is 3, where SML gives 0 and 2.
+  round: {
+    arity: 1,
+    fn: ([n]) => {
+      if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`);
+      const x = n.v;
+      const f = Math.floor(x);
+      const d = x - f;
+      let r;
+      if (d > 0.5) r = f + 1;
+      else if (d < 0.5) r = f;
+      else r = (f % 2 === 0) ? f : f + 1;   // a half goes to the even side
+      return { tag: 'int', v: r };
+    },
+  },
 };
+
+// Every Math function of one real argument has the same body, so it is written
+// once. Standard ML's Math takes and returns `real`; an int argument is
+// accepted here and converted, because refusing `Math.sqrt 4` at a teaching
+// prompt teaches nothing about mathematics.
+function mathfn(name, f) {
+  return {
+    arity: 1,
+    fn: ([n]) => {
+      if (!numericTag(n)) throw new RonmlError(`${describeValue(n)} is not a number`);
+      return { tag: 'real', v: f(n.v) };
+    },
+  };
+}

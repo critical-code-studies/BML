@@ -16,12 +16,13 @@
 // language asks and the host answers. None of them lets the host reach in.
 
 import { RonmlError, RonmlRaise } from './errors.js';
+import { nameKey, setNameFold } from './names.js';
 import { tokenize } from './lex.js';
 import { parse, joinProgramLines } from './parse.js';
 import { evalNode, formatValue, combineOutput, beginRun, setOut } from './eval.js';
 import { typeOf, remember } from './types.js';
 import { diagnose } from './diag.js';
-import { PRELUDE } from './basis.js';
+import { PRELUDE, PRELUDE_EXACT } from './basis.js';
 import { PRIMITIVES } from './prims.js';
 
 // SML'S TOP-LEVEL ANSWER. Standard ML replies `val it = 7 : int` — the name it
@@ -75,8 +76,8 @@ function topLevelNames(ast) {
   // The node names are read from eval.js, not guessed: the first version of
   // this said 'LetPat', which does not exist, so `val (a, b) = …` bound over
   // the top of a captured frame exactly as before.
-  if (ast.type === 'TopLet') return [String(ast.name).toLowerCase()];
-  if (ast.type === 'TopLetPat') return patternNames(ast.pat).map((n) => n.toLowerCase());
+  if (ast.type === 'TopLet') return [nameKey(ast.name)];
+  if (ast.type === 'TopLetPat') return patternNames(ast.pat).map((n) => nameKey(n));
   return [];
 }
 
@@ -141,6 +142,17 @@ export function flattenSession(session) {
 
 export function createInterpreter(opts = {}) {
   const typecheck = opts.typecheck || 'strict';
+  // CASE. Standard ML tells `foo` and `Foo` apart and this build did not, so
+  // `val foo = 1; val Foo = 2` left one name holding 2, and `exception Size`
+  // could not be declared at all for colliding with `size`. NostOS needs the
+  // folding — its terminals are 1980s machines and a player types HACK as
+  // readily as hack — so it is a host policy, like the unbound-name hooks, and
+  // the default is what the Definition says.
+  //
+  // Set here rather than threaded through: it is consulted from every corner of
+  // the parser, the evaluator and the checker, so one process runs one policy.
+  // See names.js.
+  setNameFold(opts.names === 'fold');
   // The language's own primitives first, the host's verbs over the top. A host
   // may shadow one by name; NostOS does not, but the order says which wins.
   // Before v1.288 there were no language primitives at all and `hd` was a game
@@ -250,7 +262,7 @@ export function createInterpreter(opts = {}) {
       // binding is a typo rather than a value. This fires ONLY at the top level:
       // arguments still evaluate to atoms exactly as before.
       if (ast && ast.type === 'Var' && /^[a-z][a-z0-9]*$/i.test(ast.name)) {
-        const lower = ast.name.toLowerCase();
+        const lower = nameKey(ast.name);
         const bound = lower in envTip();
         const cons = session.__cons || {};
         const isCon = Object.prototype.hasOwnProperty.call(cons, ast.name);
@@ -324,7 +336,11 @@ export function createInterpreter(opts = {}) {
   function loadPrelude(hostCtx) {
     if (session.__prelude) return;
     session.__prelude = true;
-    for (const line of joinProgramLines(PRELUDE)) {
+    // PRELUDE_EXACT holds what only works when names are case-sensitive:
+    // `exception Size` is the same name as `size` once case is folded, so a
+    // host that folds does not get it. Everything else is shared.
+    const src = opts.names === 'fold' ? PRELUDE : `${PRELUDE}\n${PRELUDE_EXACT}`;
+    for (const line of joinProgramLines(src)) {
       try {
         run(line, hostCtx);
       } catch { /* see above */ }

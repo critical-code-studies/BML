@@ -13,6 +13,7 @@
 // is a larger change than this stage is allowed to make.
 
 import { RonmlError, RonmlFuelError, RonmlRaise } from './errors.js';
+import { nameKey } from './names.js';
 import { parse } from './parse.js';
 import { defaultFixity } from './parse.js';
 
@@ -65,7 +66,7 @@ export function applyValue(fnVal, argVal) {
   // closure's captured environment (extended, so nothing leaks back out).
   if (fnVal && fnVal.tag === 'closure') {
     const env2 = Object.create(fnVal.env);
-    env2[fnVal.param.toLowerCase()] = argVal;
+    env2[nameKey(fnVal.param)] = argVal;
     return evalNode(fnVal.body, env2, fnVal.ctx, fnVal.builtins);
   }
   // A datatype constructor that takes arguments behaves like a function until
@@ -135,6 +136,14 @@ function valuesEqual(a, b) {
     // value are two cells: that is the whole point of having a cell, and it is
     // what Standard ML compares. `cell` is the identity.
     case 'ref': return a.cell === b.cell;
+    // An ARRAY is equal only to itself, as `ref` is: two arrays holding the
+    // same contents are two different places, and updating one must not make
+    // the other look changed. A VECTOR is immutable, so it compares by contents
+    // like a list. Standard ML draws the line in exactly this place.
+    case 'array': return a === b;
+    case 'vector':
+      return a.items.length === b.items.length
+        && a.items.every((x, i) => valuesEqual(x, b.items[i]));
     default: return false;
   }
 }
@@ -316,7 +325,7 @@ export function evalNode(node, env, ctx, builtins) {
       const reg = (store.__cons = store.__cons || {});
       reg[node.name] = { name: node.name, arity: node.arity, of: 'exn' };
       (store.__exn = store.__exn || {})[node.name] = true;
-      store[node.name.toLowerCase()] = node.arity === 0
+      store[nameKey(node.name)] = node.arity === 0
         ? { tag: 'con', name: node.name, args: [] }
         : { tag: 'confn', name: node.name, arity: node.arity, args: [] };
       return { tag: 'exndecl', name: node.name };
@@ -336,7 +345,7 @@ export function evalNode(node, env, ctx, builtins) {
           const binds = matchPattern(arm.pat, e.value, ctx);
           if (!binds) continue;
           const scope = Object.create(env);
-          for (const k of Object.keys(binds)) scope[k.toLowerCase()] = binds[k];
+          for (const k of Object.keys(binds)) scope[nameKey(k)] = binds[k];
           return evalNode(arm.body, scope, ctx, builtins);
         }
         throw e;                 // not ours: let it keep going up
@@ -357,8 +366,8 @@ export function evalNode(node, env, ctx, builtins) {
       for (const d of node.shown) {
         evalNode(d, inner, { ...ctx, session: inner }, builtins);
         if (d.name) {
-          const v = inner[d.name.toLowerCase()];
-          store[d.name.toLowerCase()] = v;
+          const v = inner[nameKey(d.name)];
+          store[nameKey(d.name)] = v;
           names.push(d.name);
           values.push(v);
         }
@@ -390,15 +399,15 @@ export function evalNode(node, env, ctx, builtins) {
         for (const k of Object.keys(anon)) {
           if (k.startsWith('__') || k.includes('.')) continue;
           inner[k] = anon[k];
-          inner[`${f.param.toLowerCase()}.${k}`] = anon[k];
+          inner[`${nameKey(f.param)}.${k}`] = anon[k];
         }
       } else {
-        const prefix = `${String(node.arg || '').toLowerCase()}.`;
+        const prefix = `${nameKey(node.arg || '')}.`;
         for (const k of Object.keys(store)) {
           if (!k.startsWith(prefix)) continue;
           const bare = k.slice(prefix.length);
           inner[bare] = store[k];
-          inner[`${f.param.toLowerCase()}.${bare}`] = store[k];
+          inner[`${nameKey(f.param)}.${bare}`] = store[k];
         }
       }
       for (const d of f.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
@@ -406,8 +415,8 @@ export function evalNode(node, env, ctx, builtins) {
       const published = [];
       for (const k of Object.keys(inner)) {
         if (k.startsWith('__') || k.includes('.')) continue;
-        if (allowed && !allowed.some((n) => n.toLowerCase() === k)) continue;
-        store[`${node.name.toLowerCase()}.${k}`] = inner[k];
+        if (allowed && !allowed.some((n) => nameKey(n) === k)) continue;
+        store[`${nameKey(node.name)}.${k}`] = inner[k];
         published.push(k);
       }
       return { tag: 'struct', name: node.name, names: published };
@@ -462,7 +471,7 @@ export function evalNode(node, env, ctx, builtins) {
       let last = { tag: 'unit' };
       for (const { d, v } of staged) {
         if (v !== null && d.type === 'TopLet') {
-          env[d.name.toLowerCase()] = v;
+          env[nameKey(d.name)] = v;
           names.push(d.name);
           values.push(v);
           last = { tag: 'binding', name: d.name, value: v };
@@ -496,7 +505,7 @@ export function evalNode(node, env, ctx, builtins) {
       const store = (ctx && ctx.session) || {};
       const opened = [];
       for (const name of node.names) {
-        const pre = `${name.toLowerCase()}.`;
+        const pre = `${nameKey(name)}.`;
         let found = 0;
         for (let e = store; e && e !== Object.prototype; e = Object.getPrototypeOf(e)) {
           for (const k of Object.keys(e)) {
@@ -510,7 +519,7 @@ export function evalNode(node, env, ctx, builtins) {
         // constructors, which is most of why anyone opens anything.
         const cons = store.__cons || {};
         for (const k of Object.keys(cons)) {
-          if (k.toLowerCase().startsWith(pre)) {
+          if (nameKey(k).startsWith(pre)) {
             cons[k.slice(pre.length)] = cons[k];
             found++;
           }
@@ -562,8 +571,8 @@ export function evalNode(node, env, ctx, builtins) {
       for (const k of Object.keys(inner)) {
         if (k.startsWith('__')) continue;
         const bare = k;
-        if (allowed && !allowed.some((n) => n.toLowerCase() === bare)) continue;
-        store[`${node.name.toLowerCase()}.${bare}`] = inner[k];
+        if (allowed && !allowed.some((n) => nameKey(n) === bare)) continue;
+        store[`${nameKey(node.name)}.${bare}`] = inner[k];
         published.push(bare);
       }
       // Constructors declared inside are visible through the prefix too.
@@ -578,7 +587,7 @@ export function evalNode(node, env, ctx, builtins) {
       const reg = (store.__cons = store.__cons || {});
       for (const c of node.cons) {
         reg[c.name] = { name: c.name, arity: c.arity, of: node.name };
-        store[c.name.toLowerCase()] = c.arity === 0
+        store[nameKey(c.name)] = c.arity === 0
           ? { tag: 'con', name: c.name, args: [] }
           : { tag: 'confn', name: c.name, arity: c.arity, args: [] };
       }
@@ -595,7 +604,7 @@ export function evalNode(node, env, ctx, builtins) {
         const binds = matchPattern(arm.pat, v, ctx);
         if (binds) {
           const scope = Object.create(env);
-          for (const k of Object.keys(binds)) scope[k.toLowerCase()] = binds[k];
+          for (const k of Object.keys(binds)) scope[nameKey(k)] = binds[k];
           node = arm.body; env = scope;
           matched = true;
           break;
@@ -605,7 +614,7 @@ export function evalNode(node, env, ctx, builtins) {
       throw new RonmlError(`no case matches ${describeValue(v)} — add an arm, or _ => … to catch the rest`);
     }
     case 'Var': {
-      const lower = node.name.toLowerCase();
+      const lower = nameKey(node.name);
       // Walk the scope chain (envs nest via Object.create for let/lambda scopes),
       // stopping before Object.prototype so `toString` etc. never resolve as vars.
       // hasOwnProperty alone missed grandparent bindings (nested closures).
@@ -658,7 +667,7 @@ export function evalNode(node, env, ctx, builtins) {
     // could not see the second.
     case 'LetRec': {
       const env2 = Object.create(env);
-      for (const b of node.binds) env2[b.name.toLowerCase()] = evalNode(b.value, env2, ctx, builtins);
+      for (const b of node.binds) env2[nameKey(b.name)] = evalNode(b.value, env2, ctx, builtins);
       node = node.body; env = env2;
       continue;
     }
@@ -670,7 +679,7 @@ export function evalNode(node, env, ctx, builtins) {
       // the two agree, and it is what a machine's program needs — a program is
       // one expression, with no top level to recurse at.)
       const env2 = Object.create(env);
-      env2[node.name.toLowerCase()] = evalNode(node.value, env2, ctx, builtins);
+      env2[nameKey(node.name)] = evalNode(node.value, env2, ctx, builtins);
       node = node.body; env = env2;
       continue;
     }
@@ -679,7 +688,7 @@ export function evalNode(node, env, ctx, builtins) {
       // the session env the REPL handed us as the base `env` (main.js passes
       // `ctx.session`), so the next line entered can read `x`. Echoes `val x = …`.
       const v = evalNode(node.value, env, ctx, builtins);
-      env[node.name.toLowerCase()] = v;
+      env[nameKey(node.name)] = v;
       return { tag: 'binding', name: node.name, value: v };
     }
     case 'LetPat': {
@@ -687,7 +696,7 @@ export function evalNode(node, env, ctx, builtins) {
       const binds = matchPattern(node.pat, v, ctx);
       if (!binds) throw new RonmlError(`this binding does not fit ${describeValue(v)}`);
       const env2 = Object.create(env);
-      for (const k of Object.keys(binds)) env2[k.toLowerCase()] = binds[k];
+      for (const k of Object.keys(binds)) env2[nameKey(k)] = binds[k];
       return evalNode(node.body, env2, ctx, builtins);
     }
     case 'TopLetPat': {
@@ -695,7 +704,7 @@ export function evalNode(node, env, ctx, builtins) {
       const binds = matchPattern(node.pat, v, ctx);
       if (!binds) throw new RonmlError(`this binding does not fit ${describeValue(v)}`);
       const names = Object.keys(binds);
-      for (const k of names) env[k.toLowerCase()] = binds[k];
+      for (const k of names) env[nameKey(k)] = binds[k];
       // Echo every name it bound, the way the top level echoes one.
       return { tag: 'bindings', names, values: names.map((k) => binds[k]) };
     }
@@ -715,7 +724,7 @@ export function evalNode(node, env, ctx, builtins) {
         // too — a closure made at one station and called at another must still
         // see the verbs it was made with.
         const env2 = Object.create(fn.env);
-        env2[fn.param.toLowerCase()] = arg;
+        env2[nameKey(fn.param)] = arg;
         node = fn.body; env = env2; ctx = fn.ctx; builtins = fn.builtins;
         continue;
       }
@@ -837,7 +846,7 @@ const TYPE_TAGS = {
 
 function checkType(ann, v, what) {
   if (!ann) return v;
-  const want = TYPE_TAGS[ann.toLowerCase()];
+  const want = TYPE_TAGS[nameKey(ann)];
   if (!want) return v;                       // nothing this build can judge
   if (!v || v.tag !== want) {
     throw new RonmlError(`${what} is annotated ${ann} but the value is ${describeValue(v)}`);
@@ -857,6 +866,8 @@ export function describeValue(v) {
     case 'key': return v.kind === 'aikey' ? 'the AI key' : 'a key';
     case 'file': return `the file ${v.name}`;
     case 'list': return 'a list';
+    case 'array': return `an array of ${v.items.length}`;
+    case 'vector': return `a vector of ${v.items.length}`;
     case 'tuple': return `a tuple of ${v.items.length}`;
     case 'record': return `a record of {${Object.keys(v.fields).join(', ')}}`;
     case 'select': return `#${v.label}`;
@@ -901,6 +912,13 @@ export function formatAnswer(v) {
     case 'tuple': return '(' + v.items.map(formatAnswer).join(', ') + ')';
     case 'record': return '{' + Object.keys(v.fields).map((k) => `${k} = ${formatAnswer(v.fields[k])}`).join(', ') + '}';
     case 'ref': return `ref ${formatAnswer(v.cell.v)}`;
+    // Standard ML does not print an array's contents at a prompt; the top level
+    // shows `[|...|] : int array` and leaves it at that, because an array is a
+    // place rather than a value and printing it invites you to read it as one.
+    // The contents are shown here — this is a teaching implementation and a
+    // hidden array is no use to somebody learning what one is.
+    case 'array': return `[|${v.items.map(formatAnswer).join(', ')}|]`;
+    case 'vector': return `#[${v.items.map(formatAnswer).join(', ')}]`;
     case 'con': {
       if (!v.args || !v.args.length) return v.name;
       const arg = (a) => (a && a.tag === 'con' && a.args && a.args.length ? `(${formatAnswer(a)})` : formatAnswer(a));
@@ -935,6 +953,8 @@ export function formatValue(v) {
     // constructors carrying something, or `Plus (Chr "a") (Chr "b")` prints as
     // `Plus Chr a Chr b`, which reads as four arguments and is not what it is.
     case 'ref': return `ref ${formatValue(v.cell.v)}`;
+    case 'array': return `[|${v.items.map(formatValue).join(', ')}|]`;
+    case 'vector': return `#[${v.items.map(formatValue).join(', ')}]`;
     case 'con': {
       if (!v.args || !v.args.length) return v.name;
       const arg = (a) => (a && a.tag === 'con' && a.args && a.args.length ? `(${formatValue(a)})` : formatValue(a));

@@ -148,7 +148,12 @@ function stripComments(src) {
 // The Basis structures with no implementation at all. Named once, so the
 // summary at the end prints THIS list rather than a sentence about it: the
 // sentence has been wrong after every addition since v1.252.
-const SKIPPED_STRUCTURES = ['Word', 'Array', 'Vector', 'IO', 'TextIO', 'OS', 'Math', 'General', 'Substring'];
+// v1.306: eight of the nine came off this line in one go — Math, Array,
+// Vector, Word, TextIO, IO, Substring and General all exist now. `OS` stays,
+// and stays for good: there is no operating system behind this, no file system
+// and no processes, so `OS.FileSys.openDir` has nothing to open. An absence
+// with a reason rather than a gap waiting to be filled.
+const SKIPPED_STRUCTURES = ['OS'];
 const SKIP_RE = new RegExp(`\\b(${SKIPPED_STRUCTURES.join('|')})\\.`);
 
 function translate(d) {

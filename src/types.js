@@ -24,6 +24,8 @@
 
 let NEXT = 0;
 
+import { nameKey } from './names.js';
+
 export function fresh() { return { k: 'var', id: NEXT++, ref: null }; }
 export function con(name, args = []) { return { k: 'con', name, args }; }
 
@@ -210,6 +212,40 @@ function baseEnv() {
     // are the only way anything in this language changes, so they are worth
     // typing properly rather than leaving as "anything".
     ref: scheme([a.id], fnOf(a, refOf(a))),
+
+    // THE MATH PRIMITIVES. Real to real, every one of them. Missing from here,
+    // they took the unknown-name path and `Math.sqrt 4.0` reported `'a` for a
+    // value that is a real and nothing else. `sqrt` was already listed; the
+    // rest arrived at v1.306 and this list did not move with them, which is the
+    // same shape as every other stale list in this project.
+    sin: mono(fnOf(REAL, REAL)),
+    cos: mono(fnOf(REAL, REAL)),
+    tan: mono(fnOf(REAL, REAL)),
+    asin: mono(fnOf(REAL, REAL)),
+    acos: mono(fnOf(REAL, REAL)),
+    atan: mono(fnOf(REAL, REAL)),
+    exp: mono(fnOf(REAL, REAL)),
+    ln: mono(fnOf(REAL, REAL)),
+    log10: mono(fnOf(REAL, REAL)),
+    sinh: mono(fnOf(REAL, REAL)),
+    cosh: mono(fnOf(REAL, REAL)),
+    tanh: mono(fnOf(REAL, REAL)),
+    mathpow: mono(fnOf(REAL, fnOf(REAL, REAL))),
+    mathatan2: mono(fnOf(REAL, fnOf(REAL, REAL))),
+    ceil: mono(fnOf(REAL, INT)),
+    trunc: mono(fnOf(REAL, INT)),
+    round: mono(fnOf(REAL, INT)),
+
+    // ARRAYS AND VECTORS. `array` and `vector` are type constructors of one
+    // argument, like `list`, so `Array.fromList [1,2,3]` is `int array` and
+    // `Array.sub` on it is `int`.
+    arraymk: scheme([a.id], fnOf(INT, fnOf(a, con('array', [a])))),
+    arrayfromlist: scheme([a.id], fnOf(listOf(a), con('array', [a]))),
+    vectorfromlist: scheme([a.id], fnOf(listOf(a), con('vector', [a]))),
+    arraysub: scheme([a.id], fnOf(con('array', [a]), fnOf(INT, a))),
+    arrayupdate: scheme([a.id], fnOf(con('array', [a]), fnOf(INT, fnOf(a, UNIT)))),
+    arraylength: scheme([a.id], fnOf(con('array', [a]), INT)),
+    arraytolist: scheme([a.id], fnOf(con('array', [a]), listOf(a))),
   };
 }
 
@@ -254,6 +290,10 @@ let CURRENT_DATACONS = {};
 // again against its actual argument. Filled from the session in typeOf, the
 // same way CURRENT_DATACONS is.
 let CURRENT_FUNCTORS = {};
+// The type ABBREVIATIONS this session has declared, as {params, rhs}. An
+// annotation naming one is expanded against it, so `int syn` becomes
+// `int list` and can then be checked like any other type.
+let CURRENT_ABBREVS = {};
 // Arity per constructor, so the App case can recognise the tuple form.
 let CURRENT_CONARITY = {};
 
@@ -279,7 +319,7 @@ function inferPattern(pat, binds, cons) {
     }
     case 'as': {
       const t = inferPattern(pat.pat, binds, cons);
-      binds[pat.name.toLowerCase()] = t;
+      binds[nameKey(pat.name)] = t;
       return t;
     }
     case 'ann': {
@@ -315,7 +355,7 @@ function inferPattern(pat, binds, cons) {
         return t;
       }
       const v = fresh();
-      binds[pat.name.toLowerCase()] = v;
+      binds[nameKey(pat.name)] = v;
       return v;
     }
     default: return fresh();
@@ -354,7 +394,7 @@ export function infer(node, env, cons) {
     case 'Unit': return UNIT;
 
     case 'Var': {
-      const k = node.name.toLowerCase();
+      const k = nameKey(node.name);
       if (Object.prototype.hasOwnProperty.call(env, k)) return instantiate(env[k]);
       if (k === 'true' || k === 'false') return BOOL;
       if (k === 'nil') return listOf(fresh());
@@ -388,7 +428,7 @@ export function infer(node, env, cons) {
     case 'Lam': {
       const p = fresh();
       if (node.ann) unify(p, fromAnnotation(node.ann, new Map()));
-      const env2 = { ...env, [node.param.toLowerCase()]: mono(p) };
+      const env2 = { ...env, [nameKey(node.param)]: mono(p) };
       return fnOf(p, infer(node.body, env2, cons));
     }
 
@@ -569,21 +609,21 @@ export function infer(node, env, cons) {
       for (const b of node.binds) {
         const v = fresh();
         vars.push(v);
-        inner[b.name.toLowerCase()] = mono(v);
+        inner[nameKey(b.name)] = mono(v);
       }
       node.binds.forEach((b, i) => unify(vars[i], infer(b.value, inner, cons)));
       const env2 = { ...env };
-      node.binds.forEach((b, i) => { env2[b.name.toLowerCase()] = generalise(env, vars[i]); });
+      node.binds.forEach((b, i) => { env2[nameKey(b.name)] = generalise(env, vars[i]); });
       return infer(node.body, env2, cons);
     }
 
     case 'Let':
     case 'TopLet': {
       const v = fresh();
-      const inner = { ...env, [node.name.toLowerCase()]: mono(v) };
+      const inner = { ...env, [nameKey(node.name)]: mono(v) };
       const t = infer(node.value, inner, cons);
       unify(v, t);
-      const env2 = { ...env, [node.name.toLowerCase()]: generalise(env, t) };
+      const env2 = { ...env, [nameKey(node.name)]: generalise(env, t) };
       return node.type === 'TopLet' ? t : infer(node.body, env2, cons);
     }
 
@@ -647,7 +687,7 @@ export function infer(node, env, cons) {
       const inner = { ...env };
       const bind = (bare, sch) => {
         inner[bare] = sch;
-        inner[`${f.param.toLowerCase()}.${bare}`] = sch;
+        inner[`${nameKey(f.param)}.${bare}`] = sch;
       };
       if (node.argDecls) {
         // An anonymous structure: type its declarations here and hand those on.
@@ -655,14 +695,14 @@ export function infer(node, env, cons) {
           if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* not this module's */ } continue; }
           try {
             const v = fresh();
-            const rec = { ...inner, [d.name.toLowerCase()]: mono(v) };
+            const rec = { ...inner, [nameKey(d.name)]: mono(v) };
             const t = infer(d.value, rec, cons);
             unify(v, t);
-            bind(d.name.toLowerCase(), isSyntacticValue(d.value) ? generalise(env, t) : mono(t));
+            bind(nameKey(d.name), isSyntacticValue(d.value) ? generalise(env, t) : mono(t));
           } catch { /* one member that will not type does not stop the rest */ }
         }
       } else {
-        const prefix = `${String(node.arg || '').toLowerCase()}.`;
+        const prefix = `${nameKey(node.arg || '')}.`;
         for (const k of Object.keys(env)) {
           if (k.startsWith(prefix)) bind(k.slice(prefix.length), env[k]);
         }
@@ -671,13 +711,21 @@ export function infer(node, env, cons) {
       for (const d of f.decls || []) {
         if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* as above */ } continue; }
         try {
+          // PRE-BIND ONLY A FUNCTION. `fun` is implicitly recursive in Standard
+          // ML and `val` is not, and both arrive here as TopLet — the
+          // difference is that `fun` (and `val rec`) parse to a Lam. Binding
+          // the name for a plain `val` made an ALIAS self-referential:
+          // `val sqrt = sqrt` inside `structure Math` read the right-hand
+          // `sqrt` as the one being declared rather than the primitive, so
+          // `Math.sqrt 4.0` reported `'a`.
+          const isFn = d.value && d.value.type === 'Lam';
           const v = fresh();
-          const rec = { ...inner, [d.name.toLowerCase()]: mono(v) };
+          const rec = isFn ? { ...inner, [nameKey(d.name)]: mono(v) } : inner;
           const t = infer(d.value, rec, cons);
-          unify(v, t);
+          if (isFn) unify(v, t);
           const sch = isSyntacticValue(d.value) ? generalise(env, t) : mono(t);
-          inner[d.name.toLowerCase()] = sch;
-          members[d.name.toLowerCase()] = sch;
+          inner[nameKey(d.name)] = sch;
+          members[nameKey(d.name)] = sch;
         } catch { /* as above */ }
       }
       node.__members = members;
@@ -700,13 +748,21 @@ export function infer(node, env, cons) {
           // failed to type and was dropped by the catch below, so `List.map`
           // vanished from the checker's registry and strict mode refused the
           // whole standard library.
+          // PRE-BIND ONLY A FUNCTION. `fun` is implicitly recursive in Standard
+          // ML and `val` is not, and both arrive here as TopLet — the
+          // difference is that `fun` (and `val rec`) parse to a Lam. Binding
+          // the name for a plain `val` made an ALIAS self-referential:
+          // `val sqrt = sqrt` inside `structure Math` read the right-hand
+          // `sqrt` as the one being declared rather than the primitive, so
+          // `Math.sqrt 4.0` reported `'a`.
+          const isFn = d.value && d.value.type === 'Lam';
           const v = fresh();
-          const rec = { ...inner, [d.name.toLowerCase()]: mono(v) };
+          const rec = isFn ? { ...inner, [nameKey(d.name)]: mono(v) } : inner;
           const t = infer(d.value, rec, cons);
-          unify(v, t);
+          if (isFn) unify(v, t);
           const sch = isSyntacticValue(d.value) ? generalise(env, t) : mono(t);
-          inner[d.name.toLowerCase()] = sch;
-          members[d.name.toLowerCase()] = sch;
+          inner[nameKey(d.name)] = sch;
+          members[nameKey(d.name)] = sch;
         } catch {
           // One member that will not type does not stop the rest: the console
           // reports rather than gates, and a structure is not all-or-nothing.
@@ -737,14 +793,32 @@ export function fromAnnotation(a, vars) {
     // ABBREVIATION (`type count = int`) is not tracked, and making it rigid
     // would refuse `val n : count = 5` for saying `count` where the checker
     // worked out `int`.
-    const nm = a.name.toLowerCase();
+    const nm = nameKey(a.name);
     if (ANNOT[nm]) return ANNOT[nm];
+    // An abbreviation of NO parameters: `type count = int`, so `count` IS int.
+    const ab0 = CURRENT_ABBREVS && CURRENT_ABBREVS[nm];
+    if (ab0 && !ab0.params.length) return fromAnnotation(ab0.rhs, vars);
     if (CURRENT_DATACONS && CURRENT_DATACONS[nm]) return con(nm);
     return fresh();
   }
   if (a.t === 'app') {
-    const nm = a.name.toLowerCase();
-    // `(int, string) pair` — more than one argument.
+    const nm = nameKey(a.name);
+    // AN ABBREVIATION APPLIED TO ARGUMENTS: `int syn`, where
+    // `type 'a syn = 'a list`. Expand it by binding the parameters to the
+    // arguments and reading the right-hand side in that scope, so `int syn`
+    // and `int list` are the same type and a clash between them is not one.
+    const ab = CURRENT_ABBREVS && CURRENT_ABBREVS[nm];
+    if (ab && ab.params.length) {
+      const given = a.args ? a.args : [a.arg];
+      if (given.length === ab.params.length) {
+        const inner2 = new Map(vars);
+        ab.params.forEach((v, i) => inner2.set(v, fromAnnotation(given[i], vars)));
+        return fromAnnotation(ab.rhs, inner2);
+      }
+      // The wrong number of arguments is somebody's mistake, but this module
+      // reports types rather than arities, so it declines to guess.
+      return fresh();
+    }
     if (a.args) {
       const args = a.args.map((x) => fromAnnotation(x, vars));
       return (CURRENT_DATACONS && CURRENT_DATACONS[nm]) ? con(nm, args) : fresh();
@@ -760,6 +834,7 @@ export function fromAnnotation(a, vars) {
     return fresh();
   }
   if (a.t === 'tuple') return tupleOf(a.parts.map((x) => fromAnnotation(x, vars)));
+  if (a.t === 'record') return recordOf(a.labels, a.parts.map((x) => fromAnnotation(x, vars)));
   if (a.t === 'fn') return fnOf(fromAnnotation(a.from, vars), fromAnnotation(a.to, vars));
   return fresh();
 }
@@ -790,6 +865,7 @@ export function typeOf(ast, session = {}) {
   for (const k of Object.keys(session.__contypes || {})) cons[k] = session.__contypes[k];
   CURRENT_DATACONS = session.__datacons || {};
   CURRENT_FUNCTORS = session.__functors || {};
+  CURRENT_ABBREVS = session.__abbrevs || {};
   CURRENT_CONARITY = session.__conarity || {};
   try {
     const t = infer(ast, env, cons);
@@ -841,7 +917,7 @@ export function remember(ast, session, t) {
   if (ast.type === 'TopLet') {
     // `fun f x = ...` is a lambda and generalises; `val r = ref nil` is an
     // application and does not.
-    session.__types[ast.name.toLowerCase()] = isSyntacticValue(ast.value)
+    session.__types[nameKey(ast.name)] = isSyntacticValue(ast.value)
       ? generalise({}, t)
       : mono(t);
   } else if ((ast.type === 'StructDecl' || ast.type === 'StructApply') && ast.__members) {
@@ -849,8 +925,11 @@ export function remember(ast, session, t) {
     // the evaluator publishes them and how the parser hands the name over:
     // `List.map` is ONE Var node whose name contains a dot, not a selection.
     for (const k of Object.keys(ast.__members)) {
-      session.__types[`${ast.name.toLowerCase()}.${k}`] = ast.__members[k];
+      session.__types[`${nameKey(ast.name)}.${k}`] = ast.__members[k];
     }
+  } else if (ast.type === 'TypeAbbrev' && ast.rhs) {
+    if (!session.__abbrevs) session.__abbrevs = {};
+    session.__abbrevs[nameKey(ast.name)] = { params: ast.params || [], rhs: ast.rhs };
   } else if (ast.type === 'Datatype') {
     // ONE VARIABLE PER TYPE PARAMETER, made here and shared by every mention of
     // that parameter in every constructor. `datatype 'a box = Box of 'a` is

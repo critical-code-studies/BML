@@ -8,6 +8,7 @@
 // were the imports below and the export keywords.
 
 import { RonmlError } from './errors.js';
+import { nameKey } from './names.js';
 import { tokenize } from './lex.js';
 
 // ---- Parser: expr -> tiny AST (Let, App, Var, Lit, ListLit) -----------
@@ -42,13 +43,13 @@ export const DECL_KEYWORDS = [
 // A type or a name list can also be the last thing before one of these.
 export const BLOCK_ENDERS = ['with', 'end', 'in', 'and'];
 const STOPS = [...DECL_KEYWORDS, ...BLOCK_ENDERS];
-const isStop = (t) => t && t.t === 'IDENT' && STOPS.includes(t.v.toLowerCase());
+const isStop = (t) => t && t.t === 'IDENT' && STOPS.includes(nameKey(t.v));
 
 function isKeyword(tok, word) {
   // `val` is Standard ML's word for a value binding. Accepted as a synonym for
   // `let` so that a line copied out of a manual binds rather than complains.
-  if (word === 'let' && tok && tok.t === 'IDENT' && ['val', 'fun'].includes(tok.v.toLowerCase())) return true;
-  return tok.t === 'IDENT' && tok.v.toLowerCase() === word;
+  if (word === 'let' && tok && tok.t === 'IDENT' && ['val', 'fun'].includes(nameKey(tok.v))) return true;
+  return tok.t === 'IDENT' && nameKey(tok.v) === word;
 }
 
 // ---- Fixity ----------------------------------------------------------------
@@ -137,7 +138,7 @@ export function parse(toks, fixityIn) {
     while (peek().t === 'BAR') {
       const save = p;
       p++;
-      if (peek().t !== 'IDENT' || peek().v.toLowerCase() !== name.toLowerCase()) { p = save; break; }
+      if (peek().t !== 'IDENT' || nameKey(peek().v) !== nameKey(name)) { p = save; break; }
       p++;
       const ps = letParams();
       if (peek().t !== 'EQ') { p = save; break; }
@@ -157,7 +158,7 @@ export function parse(toks, fixityIn) {
     const asPat = (par) => {
       if (par && par.name && par.ann) return { p: 'name', name: par.name, args: [] };
       if (typeof par !== 'string') return par.pat;
-      const lower = par.toLowerCase();
+      const lower = nameKey(par);
       if (par === '_') return { p: 'wild' };
       if (lower === 'nil') return { p: 'nil' };
       if (lower === 'true') return { p: 'bool', v: true };
@@ -270,9 +271,10 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'case')) return parseCase();
     if (isKeyword(peek(), 'fn')) return parseLambda();
     if (isKeyword(peek(), 'if')) return parseIf();
+    if (isKeyword(peek(), 'while')) return parseWhile();
     if (isKeyword(peek(), 'let')) {
       p++;
-      if (peek().t === 'IDENT' && ['val', 'fun'].includes(peek().v.toLowerCase())) p++;
+      if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v))) p++;
       // `val rec f = fn …` is how Standard ML writes a recursive VALUE binding,
       // and Harper uses it. `rec` was read as the name being bound, so a
       // variable called rec was created and `f` never bound at all: `f 5`
@@ -280,7 +282,7 @@ export function parse(toks, fixityIn) {
       // is already recursive (see the Let case in eval.js, which puts the name
       // in scope before evaluating the value), so the word is consumed and the
       // behaviour is what it asks for.
-      if (peek().t === 'IDENT' && peek().v.toLowerCase() === 'rec') p++;
+      if (peek().t === 'IDENT' && nameKey(peek().v) === 'rec') p++;
       // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
@@ -391,6 +393,14 @@ export function parse(toks, fixityIn) {
 
   function parsePattern() {
     const head = parsePatternAtom();
+    // `whole as pat` — names the value AND takes it apart. LOOSEST of all the
+    // pattern forms in Standard ML, so `w as h :: t` is `w as (h :: t)`: the
+    // name is for the whole thing, which is what the word says.
+    if (head && head.p === 'name' && !(head.args || []).length
+        && peek().t === 'IDENT' && nameKey(peek().v) === 'as') {
+      p++;
+      return { p: 'as', name: head.name, pat: parsePattern() };
+    }
     if (peek().t !== 'CONS') return head;
     p++;
     return { p: 'cons', head, tail: parsePattern() };
@@ -401,7 +411,7 @@ export function parse(toks, fixityIn) {
   function parsePatternArg() {
     const tok = peek();
     if (tok.t === 'IDENT') {
-      const lower = tok.v.toLowerCase();
+      const lower = nameKey(tok.v);
       if (!['of', 'case', 'let', 'in', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod'].includes(lower)) {
         p++;
         if (tok.v === '_') return { p: 'wild' };
@@ -464,7 +474,7 @@ export function parse(toks, fixityIn) {
     if (tok.t === 'IDENT') {
       p++;
       const v = tok.v;
-      const lower = v.toLowerCase();
+      const lower = nameKey(v);
       if (v === '_') return { p: 'wild' };
       if (lower === 'nil') return { p: 'nil' };
       if (lower === 'true') return { p: 'bool', v: true };
@@ -477,15 +487,16 @@ export function parse(toks, fixityIn) {
       // own, or `Rect w h` would read as `Rect (w h)` and the constructor would
       // see one argument where it declared two. Nest with parentheses when a
       // sub-pattern really is applied: `Node (Leaf x) r`.
-      // `whole as pattern` names the value AND takes it apart, which the
-      // corpus uses whenever a clause needs both.
-      if (peek().t === 'IDENT' && peek().v.toLowerCase() === 'as') {
-        p++;
-        return { p: 'as', name: v, pat: parsePatternAtom() };
-      }
+      // `whole as pattern` is handled by parsePattern, at the TOP of the
+      // grammar, because in Standard ML `as` binds LOOSEST of all the pattern
+      // forms. It used to be here, at the atom, so `whole as h :: t` read as
+      // `(whole as h) :: t` and `whole` named the head instead of the list
+      // (D-57). Silent: `case [1,2] of w as h :: _ => w + 1` answered 2.
       const args = [];
       while (peek().t === 'IDENT' || peek().t === 'NUM' || peek().t === 'LP' || peek().t === 'LB') {
-        if (peek().t === 'IDENT' && ['of', 'case', 'let', 'in', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod'].includes(peek().v.toLowerCase())) break;
+        // `as` ends the argument list. Without it here, moving `as` up meant a
+        // bare name swallowed the word as though it were another argument.
+        if (peek().t === 'IDENT' && ['of', 'case', 'let', 'in', 'if', 'then', 'else', 'fn', 'and', 'or', 'mod', 'as'].includes(nameKey(peek().v))) break;
         args.push(parsePatternArg());
       }
       return { p: 'name', name: v, args };
@@ -501,11 +512,30 @@ export function parse(toks, fixityIn) {
     const cond = parseExpr();
     if (!isKeyword(peek(), 'then')) throw new RonmlError("expected 'then' — try: if n == 0 then 1 else 0");
     p++;
-    const thenE = parseExpr();
+    // The BRANCHES stop below the sequence level. They used to call parseExpr,
+    // which reads `;`, so `(if true then 1 else 2; 7)` parsed as
+    // `if true then 1 else (2; 7)` and answered 1 where Standard ML answers 7.
+    // Silent, and the sort of thing only written inside parentheses, which is
+    // where a sequence lives.
+    const thenE = parseHandle();
     if (!isKeyword(peek(), 'else')) throw new RonmlError("if needs an 'else' — try: if n == 0 then 1 else 0");
     p++;
-    const elseE = parseExpr();
+    const elseE = parseHandle();
     return { type: 'If', cond, then: thenE, else: elseE };
+  }
+
+  // `while c do e`, as an EXPRESSION. It was parsed only at the declaration
+  // level, so `(while !i < 3 do i := !i + 1; !i)` — a loop and then its result,
+  // which is how anyone writes one — failed on the `do`. The Definition gives
+  // `while` as sugar for a recursive function and that is how it is built; this
+  // makes it reachable from inside an expression, which is where loops go.
+  function parseWhile() {
+    p++; // 'while'
+    const cond = parseExpr();
+    if (!isKeyword(peek(), 'do')) throw new RonmlError("expected 'do' after while's condition");
+    p++;
+    const body = parseHandle();   // stops below `;`, as if's branches do
+    return { type: 'While', cond, body };
   }
 
   function parsePipe() {
@@ -542,7 +572,7 @@ export function parse(toks, fixityIn) {
   // a guard reaches for.
   function parseBool() {
     let left = parseAndalso();
-    while (peek().t === 'IDENT' && ['or', 'orelse'].includes(peek().v.toLowerCase())) {
+    while (peek().t === 'IDENT' && ['or', 'orelse'].includes(nameKey(peek().v))) {
       p++;
       left = { type: 'Bool', op: 'or', left, right: parseAndalso() };
     }
@@ -554,8 +584,8 @@ export function parse(toks, fixityIn) {
     // `and` is both boolean conjunction and the separator between simultaneous
     // bindings. Take it as boolean only when what follows is not a binding, or
     // `let a = 1 and b = 2 in …` swallows the second name and then trips on =.
-    while (peek().t === 'IDENT' && ['and', 'andalso'].includes(peek().v.toLowerCase())
-      && !(peek().v.toLowerCase() === 'and' && andIsBinding())) {
+    while (peek().t === 'IDENT' && ['and', 'andalso'].includes(nameKey(peek().v))
+      && !(nameKey(peek().v) === 'and' && andIsBinding())) {
       p++;
       left = { type: 'Bool', op: 'and', left, right: parseCompare() };
     }
@@ -576,7 +606,7 @@ export function parse(toks, fixityIn) {
     const t = peek();
     if (OP_SYM[t.t]) return OP_SYM[t.t];
     if (t.t === 'IDENT') {
-      const w = t.v.toLowerCase();
+      const w = nameKey(t.v);
       if (w === 'div' || w === 'mod') return w;
       // A user-declared operator. Matched case-sensitively, because OR and THEN
       // are ordinary identifiers that happen to have been given a fixity.
@@ -618,7 +648,7 @@ export function parse(toks, fixityIn) {
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
     if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'andalso', 'orelse', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end', 'do', 'while', 'open',
-      'structure', 'signature', 'sig', 'struct', 'exception', 'raise', 'handle', 'type'].includes(tok.v.toLowerCase())) return false;
+      'structure', 'signature', 'sig', 'struct', 'exception', 'raise', 'handle', 'type'].includes(nameKey(tok.v))) return false;
     return ['NUM', 'STR', 'CHAR', 'NEG', 'IDENT', 'LP', 'LB', 'LC', 'HASH'].includes(tok.t);
   }
 
@@ -642,7 +672,7 @@ export function parse(toks, fixityIn) {
     // `op +` — an infix operator used as an ordinary value, so it can be passed
     // to something else: `reduce (0, op +, l)`. Desugars to the function that
     // takes the pair, which is what the operator IS in ML.
-    if (tok.t === 'IDENT' && tok.v.toLowerCase() === 'op') {
+    if (tok.t === 'IDENT' && nameKey(tok.v) === 'op') {
       p++;
       const t2 = toks[p++];
       const sym = OP_SYM[t2.t] || (t2.t === 'STAR' ? '*' : null) || (t2.t === 'IDENT' ? t2.v : null);
@@ -746,6 +776,24 @@ export function parse(toks, fixityIn) {
         eat('RP');
         return parts.length === 1 ? parts[0] : { t: 'args', parts };
       }
+      // A RECORD TYPE, `{a : int, b : string}`. parseTypeExpr had no case for
+      // it while skipTypeExpr counted braces, so the two disagreed — and the
+      // moment an abbreviation's right-hand side was PARSED rather than
+      // skipped, `type hyperlink = {protocol : string, ...}` stopped working.
+      // One conformance declaration, and it named the cause exactly.
+      if (peek().t === 'LC') {
+        p++;
+        const labels = [], parts = [];
+        while (peek().t !== 'RC' && peek().t !== 'EOF') {
+          const lab = eat('IDENT').v;
+          if (peek().t === 'COLON') p++;
+          labels.push(lab);
+          parts.push(parseTypeExpr());
+          if (peek().t === 'COMMA') p++;
+        }
+        if (peek().t === 'RC') p++;
+        return { t: 'record', labels, parts };
+      }
       const id = eat('IDENT');
       return { t: 'name', name: id.v };
     };
@@ -754,7 +802,7 @@ export function parse(toks, fixityIn) {
     // The stop list is the shared one — `of` besides, which ends a
     // constructor's payload. Written out by hand here until v1.305, missing
     // six words, exactly as the other three sites were.
-    while (peek().t === 'IDENT' && !isStop(peek()) && peek().v.toLowerCase() !== 'of') {
+    while (peek().t === 'IDENT' && !isStop(peek()) && nameKey(peek().v) !== 'of') {
       const nm = eat('IDENT').v;
       left = left && left.t === 'args' ? { t: 'app', name: nm, args: left.parts } : { t: 'app', name: nm, arg: left };
     }
@@ -842,12 +890,12 @@ export function parse(toks, fixityIn) {
   const CHAINS = ['type', 'datatype', 'val', 'fun'];
   function parseTop() {
     const first = peek();
-    const kw = first.t === 'IDENT' ? first.v.toLowerCase() : null;
+    const kw = first.t === 'IDENT' ? nameKey(first.v) : null;
     const d = parseTopOne();
     if (!CHAINS.includes(kw)) return d;
-    if (!(peek().t === 'IDENT' && peek().v.toLowerCase() === 'and')) return d;
+    if (!(peek().t === 'IDENT' && nameKey(peek().v) === 'and')) return d;
     const items = [d];
-    while (peek().t === 'IDENT' && peek().v.toLowerCase() === 'and') {
+    while (peek().t === 'IDENT' && nameKey(peek().v) === 'and') {
       toks[p] = { ...toks[p], v: kw };     // read the `and` as the keyword again
       items.push(parseTopOne());
     }
@@ -867,11 +915,31 @@ export function parse(toks, fixityIn) {
     // happens. Inference works structurally and does not need the name.
     if (isKeyword(peek(), 'type')) {
       p++;
-      while (peek().t === 'IDENT' && /^'/.test(peek().v)) p++;
+      // The PARAMETERS and the right-hand side are kept now. They were read and
+      // dropped, on the reasoning that inference works structurally and does
+      // not need the name — true of inference and false of ANNOTATIONS, which
+      // is where a name appears. `type 'a syn = 'a list` then
+      // `val y : int syn = 5` was accepted, because `int syn` could not be
+      // resolved to `int list` and became a variable that unifies with
+      // anything.
+      //
+      // Both spellings, as `datatype` takes: `'a syn` and `('a,'b) both`.
+      const params = [];
+      while (peek().t === 'IDENT' && /^'/.test(peek().v)) params.push(toks[p++].v);
+      if (peek().t === 'LP') {
+        p++;
+        while (peek().t !== 'RP' && peek().t !== 'EOF') {
+          if (peek().t === 'IDENT' && /^'/.test(peek().v)) params.push(peek().v);
+          p++;
+        }
+        if (peek().t === 'RP') p++;
+      }
       const nameTok = eat('IDENT');
       eat('EQ');
-      skipTypeExpr();
-      return { type: 'TypeAbbrev', name: nameTok.v };
+      // parseTypeExpr rather than skipTypeExpr: the right-hand side has to be
+      // KEPT to expand the abbreviation, not merely stepped over.
+      const rhs = parseTypeExpr();
+      return { type: 'TypeAbbrev', name: nameTok.v, params, rhs };
     }
     // `exception Fail` / `exception Bad of str`. An exception is a constructor
     // like any other; what makes it an exception is `raise`.
@@ -888,7 +956,7 @@ export function parse(toks, fixityIn) {
     // reads its operators correctly, and the node carries the change so eval can
     // persist it into the session for the lines after that.
     if (isKeyword(peek(), 'infix') || isKeyword(peek(), 'infixr') || isKeyword(peek(), 'nonfix')) {
-      const word = toks[p++].v.toLowerCase();
+      const word = nameKey(toks[p++].v);
       const assoc = word === 'infixr' ? 'r' : 'l';
       let prec = 0;
       if (peek().t === 'NUM' && !peek().real) prec = Number(toks[p++].v);
@@ -993,7 +1061,7 @@ export function parse(toks, fixityIn) {
           for (;;) {
             const t = peek();
             if (t.t === 'EOF') break;
-            if (t.t === 'IDENT' && ['sig', 'struct', 'let', 'local'].includes(t.v.toLowerCase())) depth++;
+            if (t.t === 'IDENT' && ['sig', 'struct', 'let', 'local'].includes(nameKey(t.v))) depth++;
             else if (isKeyword(t, 'end')) { depth--; p++; if (!depth) break; continue; }
             p++;
           }
@@ -1018,14 +1086,7 @@ export function parse(toks, fixityIn) {
     // `while c do e`. The Definition gives it as sugar for a recursive
     // function, and that is exactly how it is built here: no loop construct
     // reaches the evaluator, so nothing else had to learn about it.
-    if (isKeyword(peek(), 'while')) {
-      p++;
-      const cond = parseExpr();
-      if (!isKeyword(peek(), 'do')) throw new RonmlError("expected 'do' after while's condition");
-      p++;
-      const body = parseExpr();
-      return { type: 'While', cond, body };
-    }
+    if (isKeyword(peek(), 'while')) return parseWhile();
 
     // `abstype t = A | B with <declarations> end`. Standard ML hides the
     // representation; this build tracks names and not types, so the same
@@ -1157,12 +1218,12 @@ export function parse(toks, fixityIn) {
     }
     if (isKeyword(peek(), 'let')) {
       p++;
-      if (peek().t === 'IDENT' && ['val', 'fun'].includes(peek().v.toLowerCase())) p++;
+      if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v))) p++;
       // `val rec f = fn …`, Standard ML's recursive value binding. See the
       // same skip in the `let` case above: this is the TOP-LEVEL one, and
       // fixing only that one left `val rec` still binding a variable called
       // rec at the prompt, which is where anyone would type it.
-      if (peek().t === 'IDENT' && peek().v.toLowerCase() === 'rec') p++;
+      if (peek().t === 'IDENT' && nameKey(peek().v) === 'rec') p++;
       // `let (a, b) = e` and `let [x, y] = e` bind several names at once.
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
@@ -1202,7 +1263,7 @@ export function parse(toks, fixityIn) {
           const t = toks[q];
           if (t.t === 'EOF') return false;
           if (t.t !== 'IDENT') continue;
-          const w = t.v.toLowerCase();
+          const w = nameKey(t.v);
           if (w === 'in') return true;
           if (w === 'structure' || w === 'signature' || w === 'end') return false;
         }
