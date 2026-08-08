@@ -12,9 +12,13 @@
      Poplog ran on that furniture at Sussex, and Standard ML was added to Poplog
      by Robert Duncan and Simon Nichols, so the setting is not a costume. */
   :root {
-    --bg:    #0b0c0b;
+    /* THE PAGE IS A SURFACE, not more screen. It was a near-black with a green
+       cast, so the terminal's case sat on almost the same tone and the machine
+       had no edge. A neutral grey reads as the desk it stands on, and the case
+       and screen are then plainly darker than their surroundings. */
+    --bg:    #212123;
     --fg:    #c8ccc4;
-    --dim:   #6d7469;
+    --dim:   #878e83;
     --glow:  #3ce07a;   /* phosphor: prompts, headings, what the machine says */
     --in:    #eef3e8;   /* what you typed */
     --ty:    #86b8e0;   /* the type the checker worked out */
@@ -37,16 +41,16 @@
     --scr-dim: #a6d6b3;
   }
   html[data-phos="amber"] {
-    --glow: #ffb642; --ty: #d9c07a; --in: #ffeccd; --fg: #d6c9ae; --dim: #7d7157;
+    --glow: #ffb642; --ty: #d9c07a; --in: #ffeccd; --fg: #d6c9ae; --dim: #998c72;
     --bloom: rgba(255,182,66,.05);
     --scr-fg: #f2e6cd; --scr-dim: #dcb885;
   }
   html[data-phos="paper"] {
-    --bg: #f6f5f1; --fg: #23241f; --dim: #6a6c62; --glow: #1c5c33; --in: #000;
+    --bg: #e4e3de; --fg: #23241f; --dim: #6a6c62; --glow: #1c5c33; --in: #000;
     --ty: #1d4a78; --err: #a33c15; --rule: #dbd9d1; --panel: #fff;
     --scrim: rgba(40,40,36,.5);
-    --case:        #e6e3da;
-    --case-edge:   #cfcbc0;
+    --case:        #f2f1ec;
+    --case-edge:   #c9c6bc;
     --case-lip:    rgba(255,255,255,.7);
     --screen-edge: rgba(0,0,0,.14);
     --bloom:       rgba(0,0,0,.012);
@@ -178,9 +182,31 @@
   }
   #in::placeholder { color: var(--dim); }
 
-  /* ---- the program pane ---- */
-  .prog { margin-top: 1.5rem; }
-  .prog-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .45rem; font-size: 12px; color: var(--dim); }
+  /* ---- the library -------------------------------------------------------
+     A DOCUMENT, not a second screen. It sat directly under the terminal in the
+     same tone, so the two read as one thing and it was not clear which one you
+     were typing into. It gets its own room, a rule above it, a heading, and a
+     flat field rather than a cased screen. */
+  .prog { margin-top: 2.4rem; border-top: 1px solid var(--rule); }
+  .prog > summary {
+    display: flex; align-items: baseline; gap: .6ch;
+    padding: .9rem 0 .8rem; cursor: pointer; list-style: none; user-select: none;
+    color: var(--fg); font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .prog > summary::-webkit-details-marker { display: none; }
+  .prog > summary:hover { color: var(--glow); }
+  .prog .chev {
+    color: var(--glow); display: inline-block;
+    transition: transform .12s ease-out; transform-origin: 45% 55%;
+  }
+  .prog[open] .chev { transform: rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { .prog .chev { transition: none; } }
+  .prog .hint {
+    margin-left: auto; color: var(--dim); font-size: 11px;
+    letter-spacing: .03em; text-transform: none;
+  }
+  @media (max-width: 34rem) { .prog .hint { display: none; } }
+  .prog-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .5rem; font-size: 12px; color: var(--dim); }
   .prog-head .sp { flex: 1 1 auto; }
   .prog-head select, .prog-head button {
     font: inherit; font-size: 12px; background: transparent; color: var(--dim);
@@ -192,10 +218,14 @@
   .prog-head button.go { color: var(--glow); border-color: var(--rule); }
   .prog-head select:hover, .prog-head button:hover { border-color: var(--glow); color: var(--glow); }
   #src {
+    /* Paper, not phosphor: a flat field with a margin rule down its left edge,
+       so a glance tells you which of the two you are typing into. */
     width: 100%; min-height: 11rem; resize: vertical; font: inherit; font-size: 13.5px;
-    background: var(--panel); color: var(--fg);
-    border: 1px solid var(--rule); border-radius: 2px; padding: .7rem;
+    background: var(--case); color: var(--fg);
+    border: 1px solid var(--rule); border-left: 3px solid var(--rule);
+    border-radius: 2px; padding: .7rem .8rem;
   }
+  #src:focus { border-left-color: var(--glow); }
   #src:focus { outline: 1px solid var(--glow); outline-offset: 1px; }
 
   /* ---- modals ---- */
@@ -239,8 +269,13 @@
   .tree { margin: .4rem 0 1.5rem; color: var(--glow); white-space: pre; overflow-x: auto; font: inherit; font-size: 13px; line-height: 1.5; }
   .src-note { color: var(--dim); font-size: 13px; }
 
-  footer { margin-top: 2.5rem; padding-top: 1.1rem; border-top: 1px solid var(--rule); color: var(--dim); font-size: 13px; }
-  footer p { margin: 0 0 .4em; }
+  /* The credit is a colophon: it should be there, and it should be small. */
+  footer {
+    margin-top: 2.6rem; padding-top: 1.1rem; border-top: 1px solid var(--rule);
+    color: var(--dim); font-size: 10.5px; line-height: 1.7; letter-spacing: .03em;
+  }
+  footer p { margin: 0 0 .35em; }
+  footer em, footer code { font-size: inherit; }
   .nojs { border: 1px solid var(--err); padding: .8rem; color: var(--fg); }
 </style>
 </head>
@@ -285,15 +320,15 @@
   <button id="btn-clear">clear</button>
 </div>
 
-<div class="prog">
+<details class="prog" id="lib">
+  <summary><span class="chev" aria-hidden="true">▸</span>ML Library<span class="hint">nine programs to read, edit and run</span></summary>
   <div class="prog-head">
-    <span>a whole program</span>
     <span class="sp"></span>
     <select id="ex" aria-label="Load an example"><option value="">load an example…</option></select>
     <button class="go" id="btn-run">run</button>
   </div>
   <textarea id="src" spellcheck="false" aria-label="program"></textarea>
-</div>
+</details>
 
 <noscript><p class="nojs">The interpreter runs in your browser, so this page needs
 JavaScript. The language is in <a href="https://github.com/critical-code-studies/BML">the
