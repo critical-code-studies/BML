@@ -128,8 +128,30 @@ export function parse(toks, fixityIn) {
     const first = parsePatternAnn();
     if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after fn's parameter — try: fn x => x");
     p++;
+    // A `|` after the body is AMBIGUOUS. In
+    // `fun sa nil = fn l => l | sa (h::t) = …` it could extend this fn's match
+    // or start the next CLAUSE of sa, and this always took the first reading,
+    // so the clause after it was read as a pattern and then reported for
+    // having `=` where `=>` was wanted.
+    //
+    // What closes the pattern tells them apart: a fn arm ends in `=>`, a fun
+    // clause in `=`. So look ahead for whichever comes first outside brackets.
+    // Undecidable cases keep the old reading, which is the common one.
+    const barStartsAnArm = () => {
+      let d = 0;
+      for (let q = p + 1; toks[q]; q++) {
+        const t = toks[q].t;
+        if (t === 'LP' || t === 'LB' || t === 'LC') { d++; continue; }
+        if (t === 'RP' || t === 'RB' || t === 'RC') { if (d === 0) return true; d--; continue; }
+        if (d > 0) continue;
+        if (t === 'ARROW') return true;
+        if (t === 'EQ') return false;
+        if (t === 'SEMI' || t === 'EOF' || t === 'BAR') return true;
+      }
+      return true;
+    };
     const arms = [{ pat: first, body: parseExpr1() }];
-    while (peek().t === 'BAR') {
+    while (peek().t === 'BAR' && barStartsAnArm()) {
       p++;
       const pat = parsePatternAnn();
       if (peek().t !== 'ARROW') throw new RonmlError("expected '=>' after a pattern — try: fn nil => 0 | _ => 1");
@@ -315,6 +337,14 @@ export function parse(toks, fixityIn) {
     return { type: 'Assign', target: left, value: parseExpr1() };
   }
 
+  // Let an expression that was parsed WHOLE stand as the left operand of an
+  // operator. `let … end` is an atom in Standard ML and is read here, above the
+  // operator grammar, so `let val m = 3 in m end * 2` stopped at the `end` and
+  // reported the `*`.
+  function asOperand(node) {
+    return opSym() === null ? node : parseInfix(0, node);
+  }
+
   function parseExpr1() {
     if (isKeyword(peek(), 'raise')) { p++; return { type: 'Raise', arg: parseExpr1() }; }
     if (isKeyword(peek(), 'case')) return parseCase();
@@ -348,7 +378,7 @@ export function parse(toks, fixityIn) {
           // reported the `end` as unexpected — which reads as a broken `let`
           // rather than a missing two lines here.
           if (isKeyword(peek(), 'end')) p++;
-          return { type: 'LetPat', pat, value, body };
+          return asOperand({ type: 'LetPat', pat, value, body });
         }
         return { type: 'TopLetPat', pat, value };
       }
@@ -398,13 +428,13 @@ export function parse(toks, fixityIn) {
         // recursion inside `let` could not work — which is where Harper writes
         // most of it. Every name goes into the same frame, so each sees the
         // others once they are all there.
-        return { type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body };
+        return asOperand({ type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body });
       }
       if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let k = hack OB_XXXX in crash OB_XXXX k");
       p++;
       const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
       if (isKeyword(peek(), 'end')) p++;      // SML closes a local block with `end`
-      return { type: 'Let', name: nameTok.v, value, body };
+      return asOperand({ type: 'Let', name: nameTok.v, value, body });
     }
     return parsePipe();
   }
@@ -615,11 +645,25 @@ export function parse(toks, fixityIn) {
     // parameter patterns — which may be literals (`and od 0 = false`), not only
     // identifiers. Scanning identifiers alone made a mutually recursive
     // definition read as a boolean conjunction.
-    while (toks[q] && ['IDENT', 'LP', 'LB', 'LC', 'NUM', 'STR', 'CHAR', 'NEG', 'USCORE'].includes(toks[q].t)) q++;
-    // …and then, for `and e : real = 2.17`, its own type. Without this the
-    // annotation hides the `=`, the `and` reads as a boolean conjunction, and
-    // the chain loses every name in it including the one before the `and`.
-    if (toks[q] && toks[q].t === 'COLON') q = skipAnnAhead(q);
+    // BALANCED BRACKETS, stepped over whole, and anything inside them accepted.
+    // This scanned a LIST of token types, and the list had no closing bracket
+    // in it, so it stopped at the first `)`. A parameter it could not spell —
+    // `and race' (Pcl (r as ref c), …)` — made the `and` a boolean conjunction,
+    // and the parameter was then read as an expression, where `as` means
+    // nothing. What is inside a pattern is the pattern parser's business.
+    let d = 0;
+    for (; toks[q]; q++) {
+      const t = toks[q].t;
+      if (t === 'LP' || t === 'LB' || t === 'LC') { d++; continue; }
+      if (t === 'RP' || t === 'RB' || t === 'RC') { if (--d < 0) return false; continue; }
+      if (d > 0) continue;
+      // …and then, for `and e : real = 2.17`, its own type. Without this the
+      // annotation hides the `=`, the `and` reads as a boolean conjunction, and
+      // the chain loses every name in it including the one before the `and`.
+      if (t === 'COLON') { q = skipAnnAhead(q); break; }
+      if (t === 'EQ') break;
+      if (!['IDENT', 'NUM', 'STR', 'CHAR', 'NEG', 'USCORE'].includes(t)) return false;
+    }
     return !!toks[q] && toks[q].t === 'EQ';
   }
 
@@ -683,8 +727,14 @@ export function parse(toks, fixityIn) {
     return { type: 'App', fn: { type: 'Var', name: sym }, arg: { type: 'Tuple', items: [left, right] } };
   }
 
-  function parseInfix(minPrec) {
-    let left = parseApp();
+  // `seed` is an already-parsed left operand. `let … end` is an ATOM in
+  // Standard ML, so an operator may follow it — `let val m = 3 in m end * 2`,
+  // which two corpus declarations write as ordinary arithmetic — but the `let`
+  // is read by parseExpr1, ABOVE this level, and returned whole. Handing it
+  // back in as the left operand puts it where the grammar says it belongs
+  // without moving a hundred lines of binding code down here.
+  function parseInfix(minPrec, seed) {
+    let left = seed === undefined ? parseApp() : seed;
     for (;;) {
       const sym = opSym();
       if (sym === null) break;
@@ -1309,7 +1359,7 @@ export function parse(toks, fixityIn) {
           // reported the `end` as unexpected — which reads as a broken `let`
           // rather than a missing two lines here.
           if (isKeyword(peek(), 'end')) p++;
-          return { type: 'LetPat', pat, value, body };
+          return asOperand({ type: 'LetPat', pat, value, body });
         }
         return { type: 'TopLetPat', pat, value };
       }
@@ -1364,7 +1414,7 @@ export function parse(toks, fixityIn) {
         // where a line typed at a prompt goes — and fixing only the other left
         // mutual recursion broken exactly where anyone would meet it. Same
         // shape as the `val rec` fix earlier: one branch done, its sibling not.
-        return { type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body };
+        return asOperand({ type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body });
       }
       if (extra.length) throw new RonmlError("expected 'in' after the bindings");
       return { type: 'TopLet', name: nameTok.v, value };

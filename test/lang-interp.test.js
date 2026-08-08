@@ -1278,3 +1278,65 @@ test('showReal spells the edges the way Standard ML does', () => {
   assert.equal(showReal(1e21), '1E21', 'used to come out as 1e+21.0');
   assert.equal(showReal(1e11), '100000000000.0', 'fixed while it fits');
 });
+
+test('`let … end` can be the operand of an operator', () => {
+  // It is an ATOM in Standard ML, and this reads it above the operator grammar
+  // and returned it whole, so nothing could follow it: `let … end * 2` stopped
+  // at the `end` and reported the `*`. Two corpus declarations write exactly
+  // this, both as ordinary arithmetic.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.run('let val m = 3 in m end * 2').text, '6');
+  // The RIGHT operand is a separate gap and this does not close it: the right
+  // side is read by the operator grammar, which has no `let` in it. Both corpus
+  // declarations put the `let` on the left.
+  assert.equal(bml.run('let val m = 3 in m end + let val n = 4 in n end').ok, false,
+    'a `let` on the right is still refused');
+  bml.run('fun h (x:real):real = let val y = 2.0 in y+y end * x');
+  assert.equal(bml.run('h 3.0').text, '12.0', 'and inside a fun body');
+
+  // The `;` work at v1.307 is what this could have broken, so each of its
+  // shapes is checked here rather than left to a green suite.
+  assert.equal(bml.run('let val x = 1 in x; x + 1 end').text, '2', 'a sequence in a let body');
+  assert.equal(bml.run('(1; 2; 3)').text, '3');
+  assert.equal(bml.run('(if true then 1 else 2; 7)').text, '7');
+  assert.equal(bml.run('let val a = 2 in let val b = 3 in a * b end end').text, '6', 'nested');
+  assert.equal(bml.run('let val q = 7 in q end').text, '7', 'and with nothing after it');
+});
+
+test('a `fn` can be a clause body when the fun has more than one clause', () => {
+  // `fun sa nil = fn l => l | sa (h::t) = …`. The `|` is ambiguous — it could
+  // extend the fn's match or start sa's next clause — and the first reading was
+  // always taken, so the clause after it was read as a pattern and reported for
+  // having `=` where `=>` was wanted. A fn arm ends in `=>`, a fun clause in `=`.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('fun sa nil = fn l => l | sa (h::t) = let val u = sa t in fn l => h :: u l end');
+  assert.equal(bml.run('sa [1,2] [3]').text, '[1, 2, 3]');
+
+  // A fn that really does have several arms still gets them.
+  bml.run('val f = fn nil => 0 | _ => 1');
+  assert.equal(bml.run('f []').text, '0');
+  assert.equal(bml.run('f [9]').text, '1');
+});
+
+test('an `and` continuation reads a parameter the lookahead cannot spell', () => {
+  // Whether an `and` starts a binding is decided by scanning ahead for the `=`,
+  // and that scan listed the token types allowed on the way. The list had no
+  // closing bracket in it, so it stopped at the first `)`: a parameter holding
+  // an `as` made the `and` a boolean conjunction, and the parameter was then
+  // read as an expression, where `as` means nothing. It steps over balanced
+  // brackets now and accepts whatever is inside them.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('datatype pc = Pcl of int ref');
+  // The corpus shape, from refs.sml. It is the PARSE that was broken: the
+  // declaration was refused outright, taking the binding before the `and` down
+  // with it. (`ref` as a pattern is a separate matter and not asserted here.)
+  assert.equal(bml.run('fun z 0 = 0 | z n = n and unwrap (Pcl (r as ref c)) = c').ok, true);
+  assert.equal(bml.run('z 4').text, '4', 'and the binding before the `and` still stands');
+  assert.equal(bml.run('unwrap').ok, true, 'and the name after it is bound');
+  // The simpler shape, where `as` is all that was in the way.
+  assert.equal(bml.run('fun y1 0 = 0 and y2 (w as nil) = w').ok, true);
+  assert.equal(bml.run('y2 []').text, '[]');
+});
