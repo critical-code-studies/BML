@@ -36,6 +36,10 @@ export const CHAR = con('char');
 // `intinf` and an `int` are not the same thing and mixing them is an error the
 // checker should catch rather than a coercion it should perform.
 export const INTINF = con('intinf');
+// The type every exception has. `raise` and `handle` were special-cased and the
+// checker never learnt an exception at all, so `Fail "x"` used as a VALUE — to
+// General.exnMessage, say — was an unbound name.
+export const EXN = con('exn');
 // Kept as a name for the places that only care that it is a number.
 export const NUM = INT;
 // `string`, which is its name in Standard ML. It printed as `str` until v1.290,
@@ -1157,7 +1161,7 @@ export function typeOf(ast, session = {}) {
 // Deliberately small: the base types, a list of one of them, and the datatype
 // being declared (so `Node of tree * int * tree` knows what a tree is). Anything
 // else is a fresh variable, which is no worse than before this existed.
-const BASE_TYPES = { intinf: () => INTINF, int: () => INT, real: () => REAL, string: () => STR, str: () => STR, bool: () => BOOL, char: () => CHAR, unit: () => UNIT };
+const BASE_TYPES = { exn: () => EXN, intinf: () => INTINF, int: () => INT, real: () => REAL, string: () => STR, str: () => STR, bool: () => BOOL, char: () => CHAR, unit: () => UNIT };
 function typeOfWords(ws, selfType, selfName, tyvars) {
   if (!ws || !ws.length) return fresh();
   const last = ws[ws.length - 1];
@@ -1235,6 +1239,15 @@ export function remember(ast, session, t) {
   } else if (ast.type === 'TypeAbbrev' && ast.rhs) {
     if (!session.__abbrevs) session.__abbrevs = {};
     session.__abbrevs[nameKey(ast.name)] = { params: ast.params || [], rhs: ast.rhs };
+  } else if (ast.type === 'ExnDecl') {
+    // An exception is a constructor like any other: `exception E of string`
+    // gives `E : string -> exn`, and a nullary one is an `exn` outright.
+    const payload = ast.arity
+      ? typeOfWords(ast.argWords || [], EXN, null, {})
+      : null;
+    session.__contypes[ast.name] = generalise({}, payload ? fnOf(payload, EXN) : EXN);
+    if (!session.__conarity) session.__conarity = {};
+    session.__conarity[ast.name] = ast.arity || 0;
   } else if (ast.type === 'Datatype') {
     // ONE VARIABLE PER TYPE PARAMETER, made here and shared by every mention of
     // that parameter in every constructor. `datatype 'a box = Box of 'a` is

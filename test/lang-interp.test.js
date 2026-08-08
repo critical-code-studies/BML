@@ -2027,3 +2027,180 @@ test('IntInf: whole numbers of any size, and a type of their own', () => {
   assert.equal(mixed.ok, false);
   assert.match(mixed.text, /intinf and int are not the same type/);
 });
+
+
+// ---- the Basis, member by member (task #80) --------------------------------
+//
+// Every expected value here was written from the Basis Library and then run,
+// NOT captured from the run and pasted back: capturing asserts whatever the
+// implementation happens to do, bugs included. Four of the first 125 disagreed
+// and three were the implementation's fault — String.isPrefix took a tuple
+// where the Basis curries, Word.min and Word.max aliased the curried
+// primitives where the Basis takes a pair, and the checker had never learnt
+// what an exception is.
+const BASIS_CASES = [
+  ['List.all', 'List.all (fn x => x > 0) [1,2]', 'true'],
+  ['List.exists', 'List.exists (fn x => x > 1) [1,2]', 'true'],
+  ['List.app', '(List.app (fn _ => ()) [1]; 1)', '1'],
+  ['List.concat', 'List.concat [[1],[2,3]]', '[1, 2, 3]'],
+  ['List.drop', 'List.drop ([1,2,3], 1)', '[2, 3]'],
+  ['List.take', 'List.take ([1,2,3], 2)', '[1, 2]'],
+  ['List.null', 'List.null []', 'true'],
+  ['Bool.not', 'Bool.not true', 'false'],
+  ['Char.compare', 'Char.compare (#"a", #"b")', 'LESS'],
+  ['Char.fromString', 'Char.fromString "a"', 'SOME #"a"'],
+  ['Char.isAlphaNum', 'Char.isAlphaNum #"1"', 'true'],
+  ['Char.isAscii', 'Char.isAscii #"a"', 'true'],
+  ['Char.isCntrl', 'Char.isCntrl #"a"', 'false'],
+  ['Char.isGraph', 'Char.isGraph #"a"', 'true'],
+  ['Char.isLower', 'Char.isLower #"a"', 'true'],
+  ['Char.isPrint', 'Char.isPrint #"a"', 'true'],
+  ['Char.isSpace', 'Char.isSpace #" "', 'true'],
+  ['Char.isUpper', 'Char.isUpper #"A"', 'true'],
+  ['Char.max', 'Char.max (#"a", #"b")', '#"b"'],
+  ['Char.min', 'Char.min (#"a", #"b")', '#"a"'],
+  ['Char.notContains', 'Char.notContains "abc" #"z"', 'true'],
+  ['Char.pred', 'Char.pred #"b"', '#"a"'],
+  ['Char.toLower', 'Char.toLower #"A"', '#"a"'],
+  ['General.before', '(1 before ())', '1'],
+  ['General.ignore', 'General.ignore 5', '()'],
+  ['General.exnMessage', 'General.exnMessage (Fail "x")', '"Fail x"'],
+  ['Int.abs', 'Int.abs ~3', '3'],
+  ['Int.fromInt', 'Int.fromInt 3', '3'],
+  ['Int.min', 'Int.min (1, 2)', '1'],
+  ['Int.sign', 'Int.sign ~3', '~1'],
+  ['Int.sameSign', 'Int.sameSign (1, 2)', 'true'],
+  ['Int.toInt', 'Int.toInt 3', '3'],
+  ['Int.fmt', 'Int.fmt StringCvt.DEC 42', '"42"'],
+  ['Int.precision', 'Int.precision', 'SOME 53'],
+  ['Int.minInt', 'Int.minInt', 'SOME ~9007199254740991'],
+  ['Math.e', 'Real.floor Math.e', '2'],
+  ['Math.pow', 'Math.pow (2.0, 3.0)', '8.0'],
+  ['Math.exp', 'Real.floor (Math.exp 0.0)', '1'],
+  ['Math.ln', 'Math.ln 1.0', '0.0'],
+  ['Math.log10', 'Math.log10 100.0', '2.0'],
+  ['Math.cos', 'Math.cos 0.0', '1.0'],
+  ['Math.sin', 'Math.sin 0.0', '0.0'],
+  ['Math.tan', 'Math.tan 0.0', '0.0'],
+  ['Math.acos', 'Math.acos 1.0', '0.0'],
+  ['Math.asin', 'Math.asin 0.0', '0.0'],
+  ['Math.atan', 'Math.atan 0.0', '0.0'],
+  ['Math.atan2', 'Math.atan2 (0.0, 1.0)', '0.0'],
+  ['Math.cosh', 'Math.cosh 0.0', '1.0'],
+  ['Math.sinh', 'Math.sinh 0.0', '0.0'],
+  ['Math.tanh', 'Math.tanh 0.0', '0.0'],
+  ['Option.app', '(Option.app (fn _ => ()) (SOME 1); 1)', '1'],
+  ['Option.composePartial', 'Option.composePartial (fn x => SOME (x+1), fn y => SOME y) 1', 'SOME 2'],
+  ['Real.compare', 'Real.compare (1.0, 2.0)', 'LESS'],
+  ['Real.isNan', 'Real.isNan 1.0', 'false'],
+  ['Real.isFinite', 'Real.isFinite 1.0', 'true'],
+  ['Real.max', 'Real.max (1.0, 2.0)', '2.0'],
+  ['Real.min', 'Real.min (1.0, 2.0)', '1.0'],
+  ['Real.realCeil', 'Real.realCeil 2.1', '3.0'],
+  ['Real.realRound', 'Real.realRound 2.6', '3.0'],
+  ['Real.sameSign', 'Real.sameSign (1.0, 2.0)', 'true'],
+  ['Real.sign', 'Real.sign ~2.0', '~1'],
+  ['Real.trunc', 'Real.trunc ~2.7', '~2'],
+  ['String.compare', 'String.compare ("a","b")', 'LESS'],
+  ['String.implode', 'String.implode [#"a",#"b"]', '"ab"'],
+  ['String.isPrefix', 'String.isPrefix "he" "hello"', 'true'],
+  ['String.map', 'String.map Char.toUpper "ab"', '"AB"'],
+  ['String.toString', 'String.toString "ab"', '"ab"'],
+  ['StringCvt.BIN', 'StringCvt.BIN', 'BIN'],
+  ['StringCvt.OCT', 'StringCvt.OCT', 'OCT'],
+  ['StringCvt.EXACT', 'StringCvt.EXACT', 'EXACT'],
+  ['StringCvt.SCI', 'StringCvt.SCI NONE', 'SCI NONE'],
+  ['Substring.size', 'Substring.size "abc"', '3'],
+  ['Substring.isEmpty', 'Substring.isEmpty ""', 'true'],
+  ['Substring.concat', 'Substring.concat ["a","b"]', '"ab"'],
+  ['Substring.explode', 'Substring.explode "ab"', '[#"a", #"b"]'],
+  ['Substring.slice', 'Substring.slice ("abcd", 1, SOME 2)', '"bc"'],
+  ['Substring.splitr', 'Substring.splitr Char.isDigit "ab12"', '("ab", "12")'],
+  ['Substring.fields', 'Substring.fields (fn c => c = #",") "a,b"', '["a", "b"]'],
+  ['Time.add', 'Time.add (1000, 500)', '1500'],
+  ['Time.sub', 'Time.sub (1500, 500)', '1000'],
+  ['Time.compare', 'Time.compare (1, 2)', 'LESS'],
+  ['Time.fromMilliseconds', 'Time.fromMilliseconds 5', '5'],
+  ['Time.toMilliseconds', 'Time.toMilliseconds 5', '5'],
+  ['Time.zeroTime', 'Time.zeroTime', '0'],
+  ['Time.fromReal', 'Time.fromReal 1.5', '1500'],
+  ['Word.compare', 'Word.compare (0w1, 0w2)', 'LESS'],
+  ['Word.div', 'Word.div (0w7, 0w2)', '3'],
+  ['Word.mod', 'Word.mod (0w7, 0w2)', '1'],
+  ['Word.max', 'Word.max (0w1, 0w2)', '2'],
+  ['Word.min', 'Word.min (0w1, 0w2)', '1'],
+  ['Word.fromString', 'Word.fromString "12"', 'SOME 12'],
+  ['Word8.andb', 'Word8.andb (0w12, 0w10)', '8'],
+  ['Word8.orb', 'Word8.orb (0w12, 0w10)', '14'],
+  ['Word8.xorb', 'Word8.xorb (0w12, 0w10)', '6'],
+  ['Word8.>>', 'Word8.>> (0w255, 0w4)', '15'],
+  ['Word8.compare', 'Word8.compare (0w1, 0w2)', 'LESS'],
+  ['Word8.toInt', 'Word8.toInt 0w300', '44'],
+  ['Word8.div', 'Word8.div (0w7, 0w2)', '3'],
+  ['IntInf.-', 'IntInf.toString (IntInf.- (IntInf.fromInt 5, IntInf.fromInt 2))', '"3"'],
+  ['IntInf.<', 'IntInf.< (IntInf.fromInt 1, IntInf.fromInt 2)', 'true'],
+  ['IntInf.>=', 'IntInf.>= (IntInf.fromInt 2, IntInf.fromInt 2)', 'true'],
+  ['IntInf.div', 'IntInf.toString (IntInf.div (IntInf.fromInt 7, IntInf.fromInt 2))', '"3"'],
+  ['IntInf.mod', 'IntInf.toString (IntInf.mod (IntInf.fromInt 7, IntInf.fromInt 2))', '"1"'],
+  ['IntInf.abs', 'IntInf.toString (IntInf.abs (IntInf.fromInt ~5))', '"5"'],
+  ['IntInf.sign', 'IntInf.sign (IntInf.fromInt ~5)', '~1'],
+  ['IntInf.max', 'IntInf.toString (IntInf.max (IntInf.fromInt 1, IntInf.fromInt 2))', '"2"'],
+  ['IntInf.toInt', 'IntInf.toInt (IntInf.fromInt 42)', '42'],
+  ['Array.app', 'let val a = Array.fromList [1] in (Array.app (fn _ => ()) a; 1) end', '1'],
+  ['Array.all', 'Array.all (fn x => x > 0) (Array.fromList [1,2])', 'true'],
+  ['Array.exists', 'Array.exists (fn x => x > 1) (Array.fromList [1,2])', 'true'],
+  ['Array.find', 'Array.find (fn x => x > 1) (Array.fromList [1,2])', 'SOME 2'],
+  ['Array.foldl', 'Array.foldl (fn (x,a) => x+a) 0 (Array.fromList [1,2])', '3'],
+  ['Array.copy', 'Array.toList (Array.copy (Array.fromList [1,2]))', '[1, 2]'],
+  ['Array.tabulate', 'Array.toList (Array.tabulate (3, fn i => i))', '[0, 1, 2]'],
+  ['Vector.all', 'Vector.all (fn x => x > 0) #[1,2]', 'true'],
+  ['Vector.exists', 'Vector.exists (fn x => x > 1) #[1,2]', 'true'],
+  ['Vector.find', 'Vector.find (fn x => x > 1) #[1,2]', 'SOME 2'],
+  ['Vector.concat', 'Vector.concat [#[1],#[2]]', '#[1, 2]'],
+  ['Vector.foldr', 'Vector.foldr (fn (x,a) => x+a) 0 #[1,2]', '3'],
+  ['Vector.tabulate', 'Vector.tabulate (3, fn i => i)', '#[0, 1, 2]'],
+  ['ListPair.exists', 'ListPair.exists (fn (a,b) => a < b) ([1],[2])', 'true'],
+  ['ListPair.allEq', 'ListPair.allEq (fn (a,b) => a < b) ([1],[2])', 'true'],
+  ['ListPair.foldr', 'ListPair.foldr (fn (a,b,c) => a+b+c) 0 ([1],[2])', '3'],
+  ['ListPair.unzip', 'ListPair.unzip [(1,2)]', '([1], [2])'],
+  ['ListPair.mapEq', 'ListPair.mapEq (fn (a,b) => a+b) ([1],[2])', '[3]'],
+];
+test('the Basis answers what the Basis says, member by member', () => {
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  for (const [name, src, want] of BASIS_CASES) {
+    assert.equal(String(bml.run(src).text ?? '').split('\n').pop().trim(), want, name);
+  }
+});
+
+test('an exception is a value with a type, not only something to raise', () => {
+  // `raise` and `handle` were special-cased and the checker never learnt an
+  // exception at all, so `Fail "x"` handed to General.exnMessage was an unbound
+  // name. An exception is a constructor like any other.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.typeReport('Fail'), 'string -> exn');
+  assert.equal(bml.typeReport('Empty'), 'exn');
+  assert.equal(bml.run('General.exnMessage (Fail "x")').text, '"Fail x"');
+  bml.run('exception Mine of int');
+  assert.equal(bml.typeReport('Mine'), 'int -> exn');
+  // And raising and handling still work, which is what was special-cased.
+  assert.equal(bml.run('(raise Fail "x") handle Fail s => s').text, '"x"');
+  assert.equal(bml.run('(1 div 0) handle Div => ~1').text, '~1');
+});
+
+test('List, Array and Vector keep their own members', () => {
+  // A Python replace with no count put List's additions into every structure
+  // that had a `tabulate`, so Array and Vector each gained six members that
+  // take a LIST — `Array.hd` was reachable and would fail on an array. The
+  // coverage sweep found it; nothing else would have.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  for (const m of ['hd', 'tl', 'getItem', 'revAppend', 'mapPartial', 'collate']) {
+    assert.equal(bml.run(`List.${m}`).ok, true, `List.${m} belongs to List`);
+    assert.equal(bml.run(`Array.${m}`).ok, false, `Array has no ${m}`);
+    assert.equal(bml.run(`Vector.${m}`).ok, false, `Vector has no ${m}`);
+  }
+  assert.equal(bml.run('Array.sub (Array.fromList [7,8], 1)').text, '8');
+  assert.equal(bml.run('Vector.sub (#[7,8], 1)').text, '8');
+});

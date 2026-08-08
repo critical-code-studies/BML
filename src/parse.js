@@ -1172,7 +1172,7 @@ export function parse(toks, fixityIn) {
       let arity = 0;
       const shape = {};
       if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(shape); }
-      return { type: 'ExnDecl', name: nameTok.v, arity };
+      return { type: 'ExnDecl', name: nameTok.v, arity, argWords: shape.words || [] };
     }
     // `infix [n] id …`, `infixr [n] id …`, `nonfix id …`. These are parse-time:
     // the table is updated here so that the very next line in the same unit

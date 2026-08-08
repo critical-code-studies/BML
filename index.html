@@ -467,29 +467,38 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
          tools/sync-bml.sh says so on every sync, and docs/ROADMAP.md in NostOS
          carries the list.
 
-         Vector and word literals and exception replication came off at 0.20.0,
-         Date and Time at 0.21.0. That is the pattern to follow.
+         By 0.33.0 the list was down to three, two of them deliberate. The
+         literals, exception and datatype replication, row polymorphism, an
+         operator named where it is used, a `let` either side of an operator,
+         `open` inside one and a functor over several structures all came off
+         between 0.20.0 and 0.32.0. That is the pattern to follow.
 
          The counts that used to be here — 350/408, 91/91, 16/~47 — came off
          because they were hand-typed and sat three versions out of date. If a
          number goes back on, it needs a test that reads this file and checks it
          against what the harnesses report. -->
-    <p>BML is being developed to capture all of SML functionality. Most of
-    Harper's course examples run as written. What is missing:</p>
+    <p>BML is being developed to capture all of SML functionality. The core
+    language, the module system and the type system are complete; Harper's
+    course examples run as written. Three things are left, and two of them are
+    on purpose:</p>
     <table class="figures">
-      <tr><td>the Basis</td><td>Twenty-nine structures, 442 members. No
-          <code>OS</code>, and there will not be one, since nothing behind this
-          has a file system. <code>Date</code> is UTC only: local time needs a
-          timezone and there is no operating system here to hold one.</td></tr>
-      <tr><td>operators</td><td>An operator cannot be DEFINED in its infix form,
-          <code>fun (f ** g) (x, y) = …</code>, and <code>op</code> cannot stand
-          in a pattern.</td></tr>
-      <tr><td>blocks</td><td><code>let … end</code> works as an operator's left
-          operand but not its right, and <code>open</code> cannot appear inside
-          a <code>let</code>.</td></tr>
-      <tr><td>the stack</td><td>Non-tail recursion is bounded by the host stack.
-          Tail calls are proper, as the Definition requires.</td></tr>
+      <tr><td>the stack</td><td><b>The one real divergence.</b> Non-tail
+          recursion is bounded by the host's stack, so a deep recursion that
+          does not return through a tail call stops rather than finishing. Tail
+          calls are proper, as the Definition requires.</td></tr>
+      <tr><td>no <code>OS</code></td><td>On purpose, and it will not change:
+          nothing behind this has a file system, and a structure that answered
+          would be lying about the machine it is on.</td></tr>
+      <tr><td><code>Date</code> is UTC</td><td>Which follows from the line above.
+          Local time needs a timezone and there is no operating system here to
+          hold one, so <code>fromTimeLocal</code> is <code>fromTimeUniv</code>
+          and says so rather than guessing.</td></tr>
     </table>
+    <p>The Basis is twenty-nine structures and 430 members. Everything else that
+    was on this list — the literals, exception and datatype replication, row
+    polymorphism, an operator named where it is used, a <code>let</code> either
+    side of an operator, <code>open</code> inside one, a functor over several
+    structures — is in.</p>
   </div>
 </dialog>
 
