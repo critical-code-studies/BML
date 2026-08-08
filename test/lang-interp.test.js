@@ -5,6 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createInterpreter, smlEcho, flattenSession, showReal, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
 import { DECL_KEYWORDS, BLOCK_ENDERS, joinProgram } from '../src/parse.js';
 
@@ -1824,4 +1825,30 @@ test('G7/G8: an operator can be named where it will be used', () => {
   assert.equal(bml.run('swp (1, 2)').text, '(2, 1)');
   bml.run('val (va, vb) = (1, 2)');
   assert.equal(bml.run('va').text, '1', 'a val still takes a pattern there');
+});
+
+test('the language holds nothing of the game', () => {
+  // src/lang/ is Standard ML and nothing else. NostOS passes its own values
+  // through the evaluator — a tower, a key, a file on a card — and their tags
+  // were cased for BY NAME in there, so `case 'key': return v.kind === 'aikey'
+  // ? 'the AI key' : …` put the AI key inside an implementation of a 1997
+  // language standard. A parse error suggested `let k = hack OB_XXXX in …` too.
+  //
+  // A host with such values says how they read, the same way it says what an
+  // unbound name means. This walks the source because that is the only thing
+  // that will notice when one creeps back.
+  const dir = new URL('../src/', import.meta.url);
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
+  assert.ok(files.length >= 8, 'found the language');
+  const game = /\b(aikey|OB_XXXX|obelisk|hermes|lyre|W4|calypso|poseidon)\b/i;
+  for (const f of files) {
+    const src = fs.readFileSync(new URL(f, dir), 'utf8');
+    src.split('\n').forEach((line, i) => {
+      // A comment may EXPLAIN why a host policy exists — that is the design and
+      // it is worth writing down. Code may not.
+      const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+      const m = game.exec(code);
+      assert.equal(m, null, `${f}:${i + 1} names ${m && m[0]} in code: ${line.trim()}`);
+    });
+  }
 });

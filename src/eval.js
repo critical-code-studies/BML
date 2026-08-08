@@ -59,6 +59,15 @@ export function setHostNameHint(fn) { HOST_NAME_HINT = fn; }
 let HOST_UNBOUND = null;
 export function setHostUnbound(fn) { HOST_UNBOUND = fn; }
 
+// VALUES THE LANGUAGE DID NOT MAKE. NostOS passes its own things through this
+// evaluator — a tower, a key, a file on a card — and their tags were cased for
+// by name in here: `case 'key': return v.kind === 'aikey' ? 'the AI key' : …`.
+// The AI key is not a feature of Standard ML. A host that has such values says
+// how they compare, how they read and how they print, the same way it says what
+// an unbound name means; the language handles its own and asks about the rest.
+let HOST_VALUES = null;
+export function setHostValues(v) { HOST_VALUES = v; }
+
 // ---- Evaluator -----------------------------------------------------------
 
 export function applyValue(fnVal, argVal) {
@@ -121,9 +130,6 @@ function valuesEqual(a, b) {
     case 'list': return a.items.length === b.items.length && a.items.every((x, i) => valuesEqual(x, b.items[i]));
     case 'con': return a.name === b.name && (a.args || []).length === (b.args || []).length
       && (a.args || []).every((x, i) => valuesEqual(x, b.args[i]));
-    case 'node': return a.id === b.id;
-    case 'key': return a.kind === b.kind && a.id === b.id;
-    case 'file': return a.name === b.name;
     case 'unit': return true;
     // A record is equal when it has the same labels and equal values under
     // each. Field order is not part of a record, so compare by label.
@@ -144,7 +150,8 @@ function valuesEqual(a, b) {
     case 'vector':
       return a.items.length === b.items.length
         && a.items.every((x, i) => valuesEqual(x, b.items[i]));
-    default: return false;
+    // A value the host made: it says whether two of them are the same.
+    default: return HOST_VALUES && HOST_VALUES.equal ? HOST_VALUES.equal(a, b) : false;
   }
 }
 
@@ -976,9 +983,6 @@ export function describeValue(v) {
     case 'real': return `the real ${v.v}`;
     case 'char': return `the character ${v.v}`;
     case 'bool': return v.v ? 'true' : 'false';
-    case 'node': return `node ${v.id}`;
-    case 'key': return v.kind === 'aikey' ? 'the AI key' : 'a key';
-    case 'file': return `the file ${v.name}`;
     case 'list': return 'a list';
     case 'array': return `an array of ${v.items.length}`;
     case 'vector': return `a vector of ${v.items.length}`;
@@ -992,7 +996,7 @@ export function describeValue(v) {
     case 'binding': return `the binding ${v.name}`;
     case 'bindings': return `${v.names.length} bindings`;
     case 'fn': return `${v.name} (needs ${v.builtin.arity - v.args.length} more arg${v.builtin.arity - v.args.length === 1 ? '' : 's'})`;
-    default: return 'that';
+    default: return (HOST_VALUES && HOST_VALUES.describe && HOST_VALUES.describe(v)) || 'that';
   }
 }
 
@@ -1087,9 +1091,6 @@ export function formatValue(v) {
     case 'char': return v.v;
     case 'bool': return v.v ? 'true' : 'false';
     case 'str': return v.v;
-    case 'node': return v.id;
-    case 'key': return v.kind === 'aikey' ? (v.enc === false ? 'AIKEY:open' : 'AIKEY:sealed') : `KEY:${v.id}`;
-    case 'file': return v.name;
     case 'list': return '[' + v.items.map(formatValue).join(', ') + ']';
     case 'tuple': return '(' + v.items.map(formatValue).join(', ') + ')';
     case 'record': return '{' + Object.keys(v.fields).map((k) => `${k} = ${formatValue(v.fields[k])}`).join(', ') + '}';
@@ -1119,7 +1120,7 @@ export function formatValue(v) {
     case 'bindings': return v.names.map((n, i) => `val ${n} = ${formatValue(v.values[i])}`).join('\n');
     case 'closure': return '<fn>';
     case 'fn': return `<${describeValue(v)}>`;
-    default: return String(v);
+    default: return (HOST_VALUES && HOST_VALUES.format && HOST_VALUES.format(v)) || String(v);
   }
 }
 

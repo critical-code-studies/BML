@@ -538,7 +538,7 @@ export function parse(toks, fixityIn) {
         // others once they are all there.
         return asOperand({ type: 'LetRec', binds: [{ name: nameTok.v, value }, ...extra], body });
       }
-      if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let k = hack OB_XXXX in crash OB_XXXX k");
+      if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after let — try: let val x = 1 in x + 1 end");
       p++;
       const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
       if (isKeyword(peek(), 'end')) p++;      // SML closes a local block with `end`
