@@ -263,6 +263,9 @@ function baseEnv() {
     // The vector three. Sharing the array prims meant sharing their TYPES, so
     // `Vector.length` read `'a array -> int` and refused every vector given to
     // it — under strict, which is the default.
+    // The clock. `clocknow` takes unit because a value would be constant.
+    clocknow: mono(fnOf(UNIT, INT)),
+    clockparts: mono(fnOf(INT, tupleOf([INT, INT, INT, INT, INT, INT, INT]))),
     vectorsub: scheme([a.id], fnOf(con('vector', [a]), fnOf(INT, a))),
     vectorlength: scheme([a.id], fnOf(con('vector', [a]), INT)),
     vectortolist: scheme([a.id], fnOf(con('vector', [a]), listOf(a))),

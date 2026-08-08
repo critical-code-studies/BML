@@ -456,8 +456,8 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
          tools/sync-bml.sh says so on every sync, and docs/ROADMAP.md in NostOS
          carries the list.
 
-         Vector and word literals and exception replication came off this list
-         at 0.20.0, which is the pattern to follow.
+         Vector and word literals and exception replication came off at 0.20.0,
+         Date and Time at 0.21.0. That is the pattern to follow.
 
          The counts that used to be here — 350/408, 91/91, 16/~47 — came off
          because they were hand-typed and sat three versions out of date. If a
@@ -466,11 +466,12 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
     <p>BML is being developed to capture all of SML functionality. Most of
     Harper's course examples run as written. What is missing:</p>
     <table class="figures">
-      <tr><td>the Basis</td><td>The thinnest part. Sixteen structures. No
-          <code>Date</code>, <code>Time</code>, <code>StringCvt</code>,
-          <code>IntInf</code> or the monomorphic arrays. No
-          <code>OS</code>, and there will not be one, since nothing behind this
-          has a file system.</td></tr>
+      <tr><td>the Basis</td><td>The thinnest part. Eighteen structures. No
+          <code>StringCvt</code>, <code>IntInf</code> or the monomorphic arrays.
+          No <code>OS</code>, and there will not be one, since nothing behind
+          this has a file system. <code>Date</code> is UTC only: local time
+          needs a timezone and there is no operating system here to hold
+          one.</td></tr>
       <tr><td>operators</td><td>An operator cannot be DEFINED in its infix form,
           <code>fun (f ** g) (x, y) = …</code>, and <code>op</code> cannot stand
           in a pattern.</td></tr>
@@ -635,7 +636,13 @@ const clearScreen = () => {
 // ---- the session ------------------------------------------------------------
 let bml;
 function makeSession(announce) {
-  bml = createInterpreter({ typecheck: strict.checked ? 'strict' : 'report' });
+  // The clock is a host policy: the language asks for the time and this page
+  // has a real one to give. A machine given none says so rather than answering
+  // with somebody else's wall clock.
+  bml = createInterpreter({
+    typecheck: strict.checked ? 'strict' : 'report',
+    clock: () => Date.now(),
+  });
   bml.loadPrelude();
   if (announce) {
     write(`${BML_NAME} ${BML_VERSION}, a little Standard ML`, 'sys');

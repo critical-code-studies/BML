@@ -1467,3 +1467,37 @@ test('an exception can be replicated', () => {
   bml.run('datatype colour = R | G');
   assert.equal(bml.run('case R of R => 1 | G => 2').text, '1');
 });
+
+test('Time and Date, against a clock the host supplies', () => {
+  // The clock is a HOST POLICY, like the name folding and the unbound-name
+  // hooks: the language asks for the time and does not reach for it. So the
+  // test hands over a stopped one and every answer below is fixed.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  assert.equal(bml.run('Time.now ()').text, '0');
+  assert.equal(bml.run('Time.toSeconds (Time.fromSeconds 90)').text, '90');
+  assert.equal(bml.run('Time.toString 1500').text, '"1.500"');
+
+  // 1 January 1970 was a Thursday.
+  assert.equal(bml.run('Date.toString (Date.fromTimeUniv 0)').text, '"Thu Jan 01 00:00:00 1970"');
+  assert.equal(bml.run('Date.year (Date.fromTimeUniv 0)').text, '1970');
+  assert.equal(bml.run('Date.month (Date.fromTimeUniv 0)').text, 'Jan');
+  assert.equal(bml.run('Date.weekday (Date.fromTimeUniv 0)').text, 'Thu');
+  // 1e12 milliseconds is 9 September 2001, a Sunday.
+  assert.equal(bml.run('Date.toString (Date.fromTimeUniv 1000000000000)').text,
+    '"Sun Sep 09 01:46:40 2001"');
+});
+
+test('a machine given no clock says so', () => {
+  // Rather than quietly answering with the reader's own wall clock. Nothing
+  // behind this has an operating system, and a clock is the host's to give.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  const r = bml.run('Time.now ()');
+  assert.equal(r.ok, false);
+  assert.match(r.text, /no clock/);
+  // Everything that is a function of a time it was GIVEN still works, since
+  // none of it consults the host.
+  assert.equal(bml.run('Time.toSeconds (Time.fromSeconds 5)').text, '5');
+  assert.equal(bml.run('Date.toString (Date.fromTimeUniv 0)').text, '"Thu Jan 01 00:00:00 1970"');
+});

@@ -185,7 +185,12 @@ if (argv.includes('--help') || argv.includes('-h')) {
 // from line to line, as they do at any ML top level. No station, no verbs, no
 // host hooks — this is the language with nothing else attached, which is the
 // point of the file.
-const bml = createInterpreter({ typecheck: sloppy ? 'report' : 'strict' });
+// The clock is a host policy — the language asks, it does not reach — and a
+// command line is a machine with a real one.
+const bml = createInterpreter({
+  typecheck: sloppy ? 'report' : 'strict',
+  clock: () => Date.now(),
+});
 bml.loadPrelude();
 
 

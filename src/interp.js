@@ -245,7 +245,13 @@ export function createInterpreter(opts = {}) {
     // The host's context travels untouched to every builtin. The interpreter
     // adds only what the language itself needs to find: the session it is
     // running in, so a builtin that binds a name binds it in the right place.
-    const ctx = { ...(hostCtx || {}), session };
+    // THE CLOCK IS A HOST POLICY, like the name folding and the unbound-name
+    // hooks: the language asks for the time, it does not reach for it. Nothing
+    // behind this has an operating system, so a machine that was given no clock
+    // has none, and `Time.now ()` says so rather than quietly answering with
+    // the reader's own wall clock. NostOS hands its terminals the RUIN's time;
+    // the BML page and REPL hand over the real one.
+    const ctx = { clock: opts.clock, ...(hostCtx || {}), session };
     try {
       // STRICT MODE. In Standard ML a program that does not typecheck does not
       // run — that is the whole point of the type system, and until this existed

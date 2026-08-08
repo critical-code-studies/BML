@@ -12,7 +12,7 @@
 // because the answer changes. It found twelve gaps in one run, of which two
 // were silent wrong answers rather than absences.
 //
-// It is A CHECKLIST, not the Definition: 97 cases somebody wrote down, so a
+// It is A CHECKLIST, not the Definition: 100 cases somebody wrote down, so a
 // perfect score means every case here passes and nothing more. The corpus
 // figure is the one to quote.
 //
@@ -128,6 +128,9 @@ const CASES = [
   ['lexical', 'symbolic identifier', ['fun ** (a, b) = a * b', 'infix 7 **'], '3 ** 4', '12'],
 
   // ---- the Basis ----------------------------------------------------------
+  ['basis', 'Time conversions', [], 'Time.toSeconds (Time.fromSeconds 90)', '90'],
+  ['basis', 'Date.toString', [], 'Date.toString (Date.fromTimeUniv 0)', '"Thu Jan 01 00:00:00 1970"'],
+  ['basis', 'Date.weekday', [], 'Date.weekday (Date.fromTimeUniv 0)', 'Thu'],
   ['basis', 'Vector.length', [], 'Vector.length #[1,2,3]', '3'],
   ['basis', 'Vector.sub', [], 'Vector.sub (#[7,8,9], 1)', '8'],
   ['basis', 'List.map', [], 'List.map (fn x => x + 1) [1, 2]', '[2, 3]'],

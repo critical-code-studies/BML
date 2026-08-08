@@ -176,6 +176,34 @@ export const PRIMITIVES = {
   // exist so the CHECKER can tell them apart: `Vector.length` was typed
   // `'a array -> int`, so every use of it on a real vector was refused, and
   // strict is the default. It ran, which is why nothing caught it.
+  // THE CLOCK. Milliseconds since 1970, from the host or not at all.
+  clocknow: {
+    arity: 1,
+    fn: (_args, ctx) => {
+      const clock = ctx && ctx.clock;
+      if (typeof clock !== 'function') {
+        throw new RonmlError('this machine has no clock');
+      }
+      return { tag: 'int', v: Math.floor(clock()) };
+    },
+  },
+  // Calendar parts from a count of milliseconds, in UTC. A function of its
+  // argument and nothing else, which is why it can be a primitive at all: LOCAL
+  // time would need a timezone, and a machine with no operating system has
+  // none. `Date.fromTimeLocal` is therefore the same as `fromTimeUniv` here,
+  // and says so.
+  clockparts: {
+    arity: 1,
+    fn: ([ms]) => {
+      if (!ms || ms.tag !== 'int') throw new RonmlError(`${describeValue(ms)} is not a time`);
+      const d = new Date(ms.v);
+      const parts = [
+        d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+        d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCDay(),
+      ];
+      return { tag: 'tuple', items: parts.map((n) => ({ tag: 'int', v: n })) };
+    },
+  },
   vectorsub:    { arity: 2, fn: (args) => PRIMITIVES.arraysub.fn(args) },
   vectorlength: { arity: 1, fn: (args) => PRIMITIVES.arraylength.fn(args) },
   vectortolist: { arity: 1, fn: (args) => PRIMITIVES.arraytolist.fn(args) },
