@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  createInterpreter, smlEcho, joinProgram,
+  createInterpreter, smlEcho, joinProgram, needsMoreInput, continuesPrevious,
   BML_NAME, BML_VERSION, BML_CREDIT,
 } from '../src/index.js';
 
@@ -316,8 +316,47 @@ if (newer) {
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '- ' });
 rl.prompt();
+
+// A DECLARATION MAY RUN OVER TWO LINES, and until 0.38.0 this loop took one
+// physical line and no more, so `fun fact 0 = 1` followed by `| fact n = …`
+// answered *unexpected 'BAR'* — while the README printed a transcript showing
+// the `=` continuation prompt, which had never existed.
+//
+// Forwards: text that cannot have ended is held. Backwards: a line that cannot
+// have STARTED anything belongs to the declaration above, which has already
+// run, so it runs again with the clause attached. Rebinding is what a top level
+// does anyway.
+let pending = '';
+let last = '';
 rl.on('line', (line) => {
-  if (step(line) === null) { rl.close(); return; }
+  const typed = String(line);
+  // LEAVING ALWAYS WORKS, held line or not. Buffering it would trap anyone who
+  // opened a bracket and then thought better of the whole thing, and a prompt
+  // you cannot leave is not a prompt.
+  if (/^\s*:(quit|q)\s*$/.test(typed)) { rl.close(); return; }
+  // A BLANK LINE ABANDONS what is held. This is the way out of a stray `(`,
+  // which is unfinished by every test there is and would otherwise take the
+  // rest of the session with it.
+  if (pending && !typed.trim()) {
+    console.log('(abandoned)');
+    pending = '';
+    rl.setPrompt('- ');
+    rl.prompt();
+    return;
+  }
+  let source = typed.trim();
+  if (pending) source = `${pending} ${source}`;
+  else if (continuesPrevious(typed) && last) source = `${last} ${source}`;
+  if (source && needsMoreInput(source)) {
+    pending = source;
+    rl.setPrompt('=   ');
+    rl.prompt();
+    return;
+  }
+  pending = '';
+  rl.setPrompt('- ');
+  if (step(source) === null) { rl.close(); return; }
+  last = source;
   rl.prompt();
 });
 rl.on('close', () => { console.log(''); process.exit(0); });

@@ -209,6 +209,32 @@ test('flattenSession drops what cannot survive a save, and does not throw', () =
   assert.equal('f' in flat, false, 'the closure is left out rather than breaking the save');
 });
 
+test('a saved session does not claim a prelude it just dropped', () => {
+  // The standard library is written in ML, so every one of its functions is a
+  // closure and the loop above drops all of them. `__prelude` is the
+  // once-per-session guard and it was saved WITH them, so a restored NostBook
+  // asserted a library it did not have: loadPrelude returned at the guard and
+  // `map` came back unbound — reported as *no network on this machine*, because
+  // an unbound name at a station is read as a verb belonging elsewhere. The
+  // types survived, being plain data, so a function would typecheck against a
+  // library that was not there and fail on the next line.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.session.__prelude, true, 'the guard is set while it is loaded');
+  assert.equal(bml.run('map (fn n => n * 2) [1, 2, 3]').text, '[2, 4, 6]');
+
+  // Close the lid, exactly as the game does: flatten, then through JSON.
+  const saved = JSON.parse(JSON.stringify(flattenSession(bml.session)));
+  assert.equal('__prelude' in saved, false, 'the guard must not travel with a dropped library');
+
+  // Open it again. The guard is clear, so the library is rebuilt.
+  const back = createInterpreter({ typecheck: 'off', session: saved });
+  back.loadPrelude();
+  assert.equal(back.run('map (fn n => n * 2) [1, 2, 3]').text, '[2, 4, 6]', 'map is back');
+  assert.equal(back.run('foldl (fn (x, a) => x + a) 0 [1, 2, 3, 4]').text, '10');
+  assert.equal(back.run('List.filter (fn n => n mod 2 = 1) [1, 2, 3, 4, 5]').text, '[1, 3, 5]');
+});
+
 // ---- qualified names have types (v1.293) -------------------------------------
 
 test('a structure member reports its own type, not a fresh variable', () => {

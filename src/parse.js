@@ -90,6 +90,7 @@ const SYM_BIN = {
 
 export function parse(toks, fixityIn) {
   let p = 0;
+  try {
   // The parser's own copy: `infix` inside a block must not leak out to the
   // caller's session until the declaration is actually evaluated.
   const fixity = { ...(fixityIn || defaultFixity()) };
@@ -1656,6 +1657,17 @@ export function parse(toks, fixityIn) {
   }
   eat('EOF');
   return expr;
+  } catch (e) {
+    // HOW FAR IT GOT, on the way out. At a prompt the question is not what the
+    // error says but whether more input could fix it, and the answer is
+    // whether the parser had run out when it gave up: `if x then y` with the
+    // `else` on the next line fails at EOF, `if x then y else` with a stray
+    // `)` does not. Only `parse` can see this, `p` being its own.
+    if (e && typeof e === 'object' && !('atEnd' in e)) {
+      try { e.atEnd = p >= toks.length - 1 || toks[p].t === 'EOF'; } catch { /* frozen */ }
+    }
+    throw e;
+  }
 }
 
 // Parse one line to an AST without evaluating it. Exists so the type checker
@@ -1706,4 +1718,52 @@ export function joinProgram(text) {
 // Harper's corpus failed on its second line.
 export function joinProgramLines(text) {
   return joinProgram(text).map((l) => l.text);
+}
+
+// ---- the same rules, at a PROMPT ------------------------------------------
+//
+// A file is joined all at once, above, because every line is already there. A
+// prompt has one line and no way to look ahead, and until v1.332 it simply ran
+// each physical line on its own: pasting any of the examples into the NostBook
+// failed on the second line of every clausal function and on every comment
+// written across two lines. `fun insert (Leaf, x) = …` ran, and the `| insert
+// (Node …)` under it answered *unexpected 'BAR'*.
+//
+// Two questions do it, and between them they cover both directions a
+// declaration can run over.
+
+// Is this text unfinished — does something later have to close it? An open
+// comment, or a last token that cannot end a declaration.
+export function needsMoreInput(text) {
+  const s = String(text);
+  // Comment depth, skipping what is inside a string so that "(*" is not one.
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '"') { i++; while (i < s.length && s[i] !== '"') i += s[i] === '\\' ? 2 : 1; continue; }
+    if (s[i] === '(' && s[i + 1] === '*') { depth++; i++; continue; }
+    if (s[i] === '*' && s[i + 1] === ')' && depth) { depth--; i++; }
+  }
+  if (depth > 0) return true;
+  const code = s.replace(/\(\*[\s\S]*?\*\)/g, '').trim();
+  // A line that is only a comment is FINISHED — it does nothing, and there is
+  // nothing to wait for. Without this the parse below sees an empty token
+  // stream, fails at the end of it, and holds the prompt open forever on
+  // `(* a note *)`.
+  if (!code) return false;
+  // The same test joinProgram applies to the line ABOVE a continuation.
+  if (/(=|\||=>|->|:|,|\bof)$/.test(code)) return true;
+  // And then ASK THE PARSER, because a trailing token cannot see everything:
+  // `if x < v then Node (…)` ends on a `)` and is still waiting for its `else`,
+  // and `let val x = 1` for its `in`. Both fail at the end of the input, which
+  // is the difference between a line that is unfinished and a line that is
+  // wrong. A list of shapes here would go stale; the parser already knows.
+  try { parse(tokenize(s)); return false; }
+  catch (e) { return !!(e && e.atEnd); }
+}
+
+// Does this line continue the one before rather than start something? The
+// openers are joinProgram's, minus the leading-whitespace rule: indentation at
+// a prompt is how anyone lays out a fresh expression.
+export function continuesPrevious(line) {
+  return /^\s*(\||=>|::|@|\)|and\b|in\b|end\b|else\b|then\b)/.test(String(line));
 }
