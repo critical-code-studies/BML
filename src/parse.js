@@ -265,6 +265,38 @@ export function parse(toks, fixityIn) {
     return q;
   }
 
+  // Does a binding start at q-1 and reach its `=`? Balanced brackets are stepped
+  // over whole and anything inside them is accepted: what is in a pattern is
+  // the pattern parser's business, not a lookahead's. Three places ask this and
+  // two of them used to carry their own list of permitted tokens, neither of
+  // which had a closing bracket in it.
+  function inBeforeEnd() {
+    for (let q = p; q < toks.length; q++) {
+      const t = toks[q];
+      if (t.t === 'EOF') return false;
+      if (t.t !== 'IDENT') continue;
+      const w = nameKey(t.v);
+      if (w === 'in') return true;
+      if (w === 'structure' || w === 'signature' || w === 'end') return false;
+    }
+    return false;
+  }
+
+  function bindingReachesEq(q) {
+    if (!toks[q] || toks[q].t !== 'IDENT') return false;
+    let d = 0;
+    for (; toks[q]; q++) {
+      const t = toks[q].t;
+      if (t === 'LP' || t === 'LB' || t === 'LC') { d++; continue; }
+      if (t === 'RP' || t === 'RB' || t === 'RC') { if (--d < 0) return false; continue; }
+      if (d > 0) continue;
+      if (t === 'COLON') { q = skipAnnAhead(q); break; }
+      if (t === 'EQ') break;
+      if (!['IDENT', 'NUM', 'STR', 'CHAR', 'NEG', 'USCORE'].includes(t)) return false;
+    }
+    return !!toks[q] && toks[q].t === 'EQ';
+  }
+
   function letParams() {
     const params = [];
     for (;;) {
@@ -352,8 +384,18 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'if')) return parseIf();
     if (isKeyword(peek(), 'while')) return parseWhile();
     if (isKeyword(peek(), 'let')) {
+      // WHICH WORD it was matters and this used to throw it away. In Standard
+      // ML `val` takes a PATTERN and `fun` takes a name and its parameters;
+      // `val f x = e` is not a thing. Losing the distinction meant
+      // `val SOME z = SOME 4` was read as a function called SOME taking z, so
+      // z was never bound, the constructor was shadowed, and `SOME 9`
+      // afterwards recursed until the step budget ran out. No error anywhere.
+      let saidVal = nameKey(peek().v) === 'val';
       p++;
-      if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v))) p++;
+      if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v))) {
+        saidVal = nameKey(peek().v) === 'val';   // `let val …`
+        p++;
+      }
       // `val rec f = fn …` is how Standard ML writes a recursive VALUE binding,
       // and Harper uses it. `rec` was read as the name being bound, so a
       // variable called rec was created and `f` never bound at all: `f 5`
@@ -366,10 +408,23 @@ export function parse(toks, fixityIn) {
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
       // write down the shape and the parts get names.
-      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC') {
-        const pat = parsePatternAtom();
+      // After `val`, anything that is not `name =` or `name : ty =` is a
+      // pattern: `val 0 = 1-1`, `val SOME z = e`, `val h :: t = e`. The bare
+      // `let name … = e` the game's terminals use said neither word and is
+      // untouched.
+      const valTakesPattern = () => {
+        if (!saidVal) return false;
+        if (peek().t !== 'IDENT') return true;
+        const nxt = toks[p + 1];
+        return !!nxt && nxt.t !== 'EQ' && nxt.t !== 'COLON';
+      };
+      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern()) {
+        const pat = valTakesPattern() ? parsePattern() : parsePatternAtom();
         eat('EQ');
         const value = parseExpr();
+        if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v)) && inBeforeEnd()) {
+          return { type: 'LetPat', pat, value, body: parseExpr1() };
+        }
         if (isKeyword(peek(), 'in')) {
           p++;
           const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
@@ -397,13 +452,7 @@ export function parse(toks, fixityIn) {
       for (;;) {
         // Only treat `and` as a binding separator when what follows really is
         // a binding; otherwise `let x = a and b in …` would lose its boolean.
-        const isBind = () => {
-          let q = p + 1;
-          if (!toks[q] || toks[q].t !== 'IDENT') return false;
-          while (toks[q] && (toks[q].t === 'IDENT' || toks[q].t === 'LP' || toks[q].t === 'LB')) q++;
-          if (toks[q] && toks[q].t === 'COLON') q = skipAnnAhead(q);
-          return !!toks[q] && toks[q].t === 'EQ';
-        };
+        const isBind = () => bindingReachesEq(p + 1);
         if ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let')) {
           p++;
           const n2 = eat('IDENT');
@@ -638,34 +687,7 @@ export function parse(toks, fixityIn) {
   // are functions: `linked and calls_home` must not call home when unlinked.
   // Is the `and` at position p separating two BINDINGS rather than joining two
   // conditions? It is if what follows looks like `name … =`.
-  function andIsBinding() {
-    let q = p + 1;
-    if (!toks[q] || toks[q].t !== 'IDENT') return false;
-    // A binding's left-hand side is a name and then, for a `fun` clause, its
-    // parameter patterns — which may be literals (`and od 0 = false`), not only
-    // identifiers. Scanning identifiers alone made a mutually recursive
-    // definition read as a boolean conjunction.
-    // BALANCED BRACKETS, stepped over whole, and anything inside them accepted.
-    // This scanned a LIST of token types, and the list had no closing bracket
-    // in it, so it stopped at the first `)`. A parameter it could not spell —
-    // `and race' (Pcl (r as ref c), …)` — made the `and` a boolean conjunction,
-    // and the parameter was then read as an expression, where `as` means
-    // nothing. What is inside a pattern is the pattern parser's business.
-    let d = 0;
-    for (; toks[q]; q++) {
-      const t = toks[q].t;
-      if (t === 'LP' || t === 'LB' || t === 'LC') { d++; continue; }
-      if (t === 'RP' || t === 'RB' || t === 'RC') { if (--d < 0) return false; continue; }
-      if (d > 0) continue;
-      // …and then, for `and e : real = 2.17`, its own type. Without this the
-      // annotation hides the `=`, the `and` reads as a boolean conjunction, and
-      // the chain loses every name in it including the one before the `and`.
-      if (t === 'COLON') { q = skipAnnAhead(q); break; }
-      if (t === 'EQ') break;
-      if (!['IDENT', 'NUM', 'STR', 'CHAR', 'NEG', 'USCORE'].includes(t)) return false;
-    }
-    return !!toks[q] && toks[q].t === 'EQ';
-  }
+  function andIsBinding() { return bindingReachesEq(p + 1); }
 
   // TWO LEVELS, because Standard ML has two: `andalso` binds tighter than
   // `orelse`, so `true orelse true andalso false` is `true orelse (true andalso
@@ -1336,8 +1358,18 @@ export function parse(toks, fixityIn) {
       return { type: 'Datatype', name: nameTok.v, params, cons };
     }
     if (isKeyword(peek(), 'let')) {
+      // WHICH WORD it was matters and this used to throw it away. In Standard
+      // ML `val` takes a PATTERN and `fun` takes a name and its parameters;
+      // `val f x = e` is not a thing. Losing the distinction meant
+      // `val SOME z = SOME 4` was read as a function called SOME taking z, so
+      // z was never bound, the constructor was shadowed, and `SOME 9`
+      // afterwards recursed until the step budget ran out. No error anywhere.
+      let saidVal = nameKey(peek().v) === 'val';
       p++;
-      if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v))) p++;
+      if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v))) {
+        saidVal = nameKey(peek().v) === 'val';   // `let val …`
+        p++;
+      }
       // `val rec f = fn …`, Standard ML's recursive value binding. See the
       // same skip in the `let` case above: this is the TOP-LEVEL one, and
       // fixing only that one left `val rec` still binding a variable called
@@ -1347,10 +1379,23 @@ export function parse(toks, fixityIn) {
       // Harper introduces this as "the following generalization of a value
       // binding" (1993, p.16), before case, because it is the simpler idea:
       // write down the shape and the parts get names.
-      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC') {
-        const pat = parsePatternAtom();
+      // After `val`, anything that is not `name =` or `name : ty =` is a
+      // pattern: `val 0 = 1-1`, `val SOME z = e`, `val h :: t = e`. The bare
+      // `let name … = e` the game's terminals use said neither word and is
+      // untouched.
+      const valTakesPattern = () => {
+        if (!saidVal) return false;
+        if (peek().t !== 'IDENT') return true;
+        const nxt = toks[p + 1];
+        return !!nxt && nxt.t !== 'EQ' && nxt.t !== 'COLON';
+      };
+      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern()) {
+        const pat = valTakesPattern() ? parsePattern() : parsePatternAtom();
         eat('EQ');
         const value = parseExpr();
+        if (peek().t === 'IDENT' && ['val', 'fun'].includes(nameKey(peek().v)) && inBeforeEnd()) {
+          return { type: 'LetPat', pat, value, body: parseExpr1() };
+        }
         if (isKeyword(peek(), 'in')) {
           p++;
           const body = inSeq(parseExpr);   // a let body sequences with `;`, as parens do
@@ -1388,13 +1433,7 @@ export function parse(toks, fixityIn) {
         }
         return false;
       };
-      const isBind = () => {
-        let q = p + 1;
-        if (!toks[q] || toks[q].t !== 'IDENT') return false;
-        while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
-        if (toks[q] && toks[q].t === 'COLON') q = skipAnnAhead(q);
-        return !!toks[q] && toks[q].t === 'EQ';
-      };
+      const isBind = () => bindingReachesEq(p + 1);
       while (!inBlock && inAhead() && ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let'))) {
         p++;
         const n2 = eat('IDENT');

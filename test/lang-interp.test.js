@@ -1340,3 +1340,66 @@ test('an `and` continuation reads a parameter the lookahead cannot spell', () =>
   assert.equal(bml.run('fun y1 0 = 0 and y2 (w as nil) = w').ok, true);
   assert.equal(bml.run('y2 []').text, '[]');
 });
+
+test('`val` takes a pattern, and the constructor survives it', () => {
+  // `val` and `fun` were skipped without recording WHICH word was written, and
+  // in Standard ML `val` takes a pattern where `fun` takes a name and its
+  // parameters. So `val SOME z = SOME 4` was read as a function called SOME
+  // taking z: z was never bound, the constructor was shadowed, and `SOME 9`
+  // afterwards recursed until the step budget ran out. No error at any point,
+  // which is what made it worth coming back for.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('val SOME z = SOME 4');
+  assert.equal(bml.run('z').text, '4', 'the pattern binds');
+  assert.equal(bml.run('SOME 9').text, 'SOME 9', 'and SOME is still the constructor');
+
+  assert.equal(bml.run('val 0 = 1 - 1').ok, true, 'a literal pattern');
+  bml.run('val h :: t = [1,2,3]');
+  assert.equal(bml.run('h').text, '1');
+  assert.equal(bml.run('t').text, '[2, 3]');
+
+  // The ordinary forms are untouched, including the bare `let name … = e` the
+  // game's terminals use, which says neither word.
+  bml.run('val x = 1');
+  assert.equal(bml.run('x').text, '1');
+  bml.run('val y : int = 2');
+  assert.equal(bml.run('y').text, '2');
+  bml.run('val (a, b) = (5, 6)');
+  assert.equal(bml.run('a').text, '5');
+  bml.run('fun sq n = n * n');
+  assert.equal(bml.run('sq 4').text, '16');
+});
+
+test('a `let` can hold several pattern bindings before its `in`', () => {
+  // The pattern path handled ONE and then wanted `in`; the chain that takes
+  // several is keyed by name, and a pattern has none. Sequential val bindings
+  // nest, so the rest of the block is parsed as its own let. datatype.sml
+  // writes this four times.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('let val SOME a = SOME 3 val SOME b = SOME 4 in a + b end').text, '7');
+  assert.equal(bml.run('let val SOME a = SOME 3 val SOME b = SOME (a+1) in b end').text, '4',
+    'and the first is in scope inside the second');
+  assert.equal(bml.run('let val SOME y = SOME 2 val x = 1 in x + y end').text, '3', 'mixed');
+  // A `struct` body is a list of declarations with no `in`, so a pattern
+  // binding there ends where it ends rather than swallowing the rest.
+  bml.run('structure S = struct datatype d = D of int val D q = D 5 val r = 1 end');
+  assert.equal(bml.run('S.q').text, '5');
+  assert.equal(bml.run('S.r').text, '1');
+});
+
+test('one lookahead decides whether an `and` starts a binding', () => {
+  // Three places asked this and two carried their own list of permitted tokens,
+  // neither of which had a closing bracket or a comma in it. A tuple parameter
+  // stopped the scan short of the `=`, so `and lk' ((k, d), l, r) = …` was read
+  // as a boolean conjunction — which is what refs.sml and repinv.sml write.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('let fun c1 0 = 1 and c2 ((k, d), l, r) = k in c2 ((7, 0), 0, 0) end').text, '7');
+  assert.equal(bml.run('let fun b1 0 = 1 | b1 n = b2 n and b2 (x, y) = x in b2 (5, 6) end').text, '5',
+    'a clausal fun continued by `and`');
+  assert.equal(
+    bml.run('let fun ev 0 = true | ev n = od (n-1) and od 0 = false | od n = ev (n-1) in ev 4 end').text,
+    'true', 'mutual recursion inside a let, which is the reason to write one');
+});

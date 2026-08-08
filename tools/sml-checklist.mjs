@@ -12,7 +12,7 @@
 // because the answer changes. It found twelve gaps in one run, of which two
 // were silent wrong answers rather than absences.
 //
-// It is A CHECKLIST, not the Definition: 88 cases somebody wrote down, so a
+// It is A CHECKLIST, not the Definition: 91 cases somebody wrote down, so a
 // perfect score means every case here passes and nothing more. The corpus
 // figure is the one to quote.
 //
@@ -59,6 +59,12 @@ const CASES = [
   ['patterns', 'list pattern', [], 'case [1,2,3] of h :: t => h', '1'],
   ['patterns', 'nested pattern', [], 'case SOME (1, 2) of SOME (a, _) => a | NONE => 0', '1'],
   ['patterns', 'val destructuring', ['val (a, b) = (1, 2)'], 'a + b', '3'],
+  // `val` takes a PATTERN in Standard ML. A constructor pattern used to be read
+  // as a function binding, so the name was never bound and the constructor was
+  // shadowed — no error, which is why the checklist needed to say it.
+  ['patterns', 'constructor pattern in a val', ['val SOME cz = SOME 4'], 'cz', '4'],
+  ['patterns', 'val leaves the constructor alone', ['val SOME cz2 = SOME 4'], 'SOME 9', 'SOME 9'],
+  ['patterns', 'cons pattern in a val', ['val vh :: vt = [1,2,3]'], '(vh, vt)', '(1, [2, 3])'],
   ['patterns', 'as (layered) pattern', [], 'case [1,2] of whole as h :: _ => length whole', '2'],
   ['patterns', 'record pattern', [], 'case {a = 1, b = 2} of {a = x, b = y} => x + y', '3'],
   ['patterns', 'record pattern with ...', [], 'case {a = 1, b = 2} of {a = x, ...} => x', '1'],
