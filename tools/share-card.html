@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BML share card</title>
+<!--
+  The source of share.png, the social preview. Rendered at 1200x630 with:
+
+    sh tools/make-share-card.sh
+
+  It is a page rather than a drawing so the card and the site cannot drift:
+  same colours, same font stack, same banner art, same prompt. The session in
+  it is real BML and its answers are the ones the interpreter gives.
+-->
+<style>
+  @page { size: 1200px 630px; margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    background: #212123;
+    font: 20px/1.5 "SF Mono", ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    color: #c8ccc4;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card { width: 1120px; height: 550px; display: flex; flex-direction: column; }
+
+  /* The machine, cased and lit, as on the page. */
+  .term {
+    flex: 1 1 auto;
+    background: #191b18;
+    border: 1px solid #2c2f28;
+    border-radius: 10px;
+    padding: 12px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.045) inset,
+                0 20px 40px -16px rgba(0,0,0,.6),
+                0 3px 8px rgba(0,0,0,.35);
+    display: flex;
+  }
+  .glass {
+    flex: 1 1 auto; position: relative; overflow: hidden;
+    background: #101210; border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.75) inset, 0 0 0 1px rgba(0,0,0,.6) inset;
+    padding: 26px 30px;
+  }
+  .glass::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 100% at 50% 0%, rgba(60,224,122,.05), transparent 70%);
+  }
+
+  pre { margin: 0; font: inherit; white-space: pre; }
+  .banner { color: #3ce07a; font-size: 17px; line-height: 1.22; }
+  .sess { margin-top: 18px; font-size: 19px; line-height: 1.6; }
+  .sys { color: #a6d6b3; }
+  .in  { color: #eef3e8; }
+  .ty  { color: #86b8e0; }
+  .cur { color: #3ce07a; }
+
+  .foot {
+    display: flex; align-items: baseline; gap: 18px;
+    padding: 16px 4px 0; font-size: 17px; color: #878e83;
+  }
+  .foot .url { color: #3ce07a; font-size: 19px; }
+  .foot .sp { flex: 1 1 auto; }
+  .foot b { color: #c8ccc4; font-weight: 600; }
+</style>
+<div class="card">
+  <div class="term"><div class="glass">
+<pre class="banner">┌─────────────────────────────────────────────────────┐
+│  ██████╗ ███╗   ███╗██╗                             │
+│  ██╔══██╗████╗ ████║██║                             │
+│  ██████╔╝██╔████╔██║██║        a little Standard ML │
+│  ██╔══██╗██║╚██╔╝██║██║                             │
+│  ██████╔╝██║ ╚═╝ ██║███████╗                        │
+│  ╚═════╝ ╚═╝     ╚═╝╚══════╝                        │
+└─────────────────────────────────────────────────────┘</pre>
+<pre class="sess"><span class="sys">-</span> <span class="in">datatype 'a tree = Leaf | Node of 'a tree * 'a * 'a tree;</span>
+<span class="sys">datatype tree = Leaf | Node</span>
+<span class="sys">-</span> <span class="in">fun size Leaf = 0 | size (Node (l, _, r)) = 1 + size l + size r;</span>
+<span class="sys">val size = &lt;fn&gt;</span> <span class="ty">: 'a tree -&gt; int</span>
+<span class="sys">-</span> <span class="in">size (Node (Node (Leaf, 1, Leaf), 2, Leaf));</span>
+<span class="sys">val it = 2</span> <span class="ty">: int</span>
+<span class="sys">-</span> <span class="cur">_</span></pre>
+  </div></div>
+  <div class="foot">
+    <span class="url">critical-code-studies.github.io/BML</span>
+    <span class="sp"></span>
+    <span>Standard ML in the browser · <b>type at the prompt and it answers</b></span>
+  </div>
+</div>
