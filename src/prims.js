@@ -36,6 +36,11 @@ function raiseStd(name, why) {
 import { describeValue, formatValue, pushOut } from './eval.js';
 
 const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
+/** The BigInt out of an arbitrary-precision value. */
+const bigOf = (x) => {
+  if (!x || x.tag !== 'intinf') throw new RonmlError(`${describeValue(x)} is not an IntInf`);
+  return x.v;
+};
 /** A whole number out of a value, or a refusal naming what arrived instead. */
 const intOf = (x) => {
   if (!x || x.tag !== 'int') throw new RonmlError(`${describeValue(x)} is not a word`);
@@ -181,6 +186,49 @@ export const PRIMITIVES = {
   // exist so the CHECKER can tell them apart: `Vector.length` was typed
   // `'a array -> int`, so every use of it on a real vector was refused, and
   // strict is the default. It ran, which is why nothing caught it.
+  // ARBITRARY PRECISION, over JavaScript's BigInt. A separate tag, so an
+  // `intinf` prints, compares and types as itself: the Basis makes IntInf.int a
+  // type of its own and mixing it with `int` is an error, not a coercion.
+  bigfromint: { arity: 1, fn: ([n]) => ({ tag: 'intinf', v: BigInt(intOf(n)) }) },
+  bigtoint: { arity: 1, fn: ([b]) => ({ tag: 'int', v: Number(bigOf(b)) }) },
+  bigfromstring: {
+    arity: 1,
+    fn: ([s]) => {
+      if (!s || s.tag !== 'str') throw new RonmlError(`${describeValue(s)} is not a string`);
+      // Standard ML writes a negative with a tilde, and that is what a reader
+      // will have typed.
+      const t = s.v.trim().replace(/^~/, '-');
+      if (!/^-?[0-9]+$/.test(t)) throw new RonmlError(`${s.v} is not a whole number`);
+      return { tag: 'intinf', v: BigInt(t) };
+    },
+  },
+  bigtostring: { arity: 1, fn: ([b]) => ({ tag: 'str', v: String(bigOf(b)).replace(/^-/, '~') }) },
+  bigadd: { arity: 2, fn: ([a, b]) => ({ tag: 'intinf', v: bigOf(a) + bigOf(b) }) },
+  bigsub: { arity: 2, fn: ([a, b]) => ({ tag: 'intinf', v: bigOf(a) - bigOf(b) }) },
+  bigmul: { arity: 2, fn: ([a, b]) => ({ tag: 'intinf', v: bigOf(a) * bigOf(b) }) },
+  bigdiv: {
+    arity: 2,
+    fn: ([a, b]) => {
+      if (bigOf(b) === 0n) raiseStd('Div', 'a whole number cannot be divided by zero');
+      return { tag: 'intinf', v: bigOf(a) / bigOf(b) };
+    },
+  },
+  bigmod: {
+    arity: 2,
+    fn: ([a, b]) => {
+      if (bigOf(b) === 0n) raiseStd('Div', 'a whole number cannot be divided by zero');
+      return { tag: 'intinf', v: bigOf(a) % bigOf(b) };
+    },
+  },
+  bigpow: { arity: 2, fn: ([a, n]) => ({ tag: 'intinf', v: bigOf(a) ** BigInt(intOf(n)) }) },
+  bigcmp: {
+    arity: 2,
+    fn: ([a, b]) => {
+      const x = bigOf(a), y = bigOf(b);
+      return { tag: 'int', v: x < y ? -1 : x > y ? 1 : 0 };
+    },
+  },
+
   // BITWISE. Word's operators, and Word8's. JavaScript's own are 32-bit and
   // signed, so `>>> 0` puts each answer back in the unsigned range a word is:
   // `notb 0w0` is 4294967295, not ~1.

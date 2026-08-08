@@ -1965,3 +1965,65 @@ test('every member of every structure is actually bound', () => {
   // And OS stays out for good: nothing behind this has a file system.
   assert.equal(members.OS, undefined, 'OS is deliberately absent');
 });
+
+test('Word8 and the bitwise operators Word never had', () => {
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  const is = (src, want) => assert.equal(bml.run(src).text, want, src);
+  // A word is unsigned, so each answer goes back into that range: `notb 0w0`
+  // is 4294967295, not ~1.
+  is('Word.andb (0w12, 0w10)', '8');
+  is('Word.orb (0w12, 0w10)', '14');
+  is('Word.xorb (0w12, 0w10)', '6');
+  is('Word.notb 0w0', '4294967295');
+  is('Word.wordSize', '32');
+  // `Word.<<` could not be WRITTEN: the identifier lexer stops at the `<`, so
+  // `Word.` was one token and `<<` the next, and every shift was unreachable.
+  is('Word.<< (0w1, 0w4)', '16');
+  is('Word.>> (0w16, 0w4)', '1');
+  is('Word.~>> (0w16, 0w4)', '1');
+  // Word8 is the same, masked to eight bits.
+  is('Word8.wordSize', '8');
+  is('Word8.notb 0w0', '255');
+  is('Word8.fromInt 300', '44');
+  is('Word8.<< (0w1, 0w9)', '0');
+  is('Word8.toString 0w255', '"FF"');
+});
+
+test('the monomorphic arrays and vectors', () => {
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  const is = (src, want) => assert.equal(bml.run(src).text, want, src);
+  is('CharVector.toString (CharVector.fromString "abc")', '"abc"');
+  is('CharVector.length (CharVector.fromString "abc")', '3');
+  is('let val a = CharArray.fromString "abc" in (CharArray.update (a,0,#"z"); CharArray.toString a) end', '"zbc"');
+  is('Word8Vector.length (Word8Vector.fromList [0w1,0w2])', '2');
+  is('let val a = Word8Array.fromList [0w1] in (Word8Array.update (a,0,0w9); Word8Array.sub (a,0)) end', '9');
+  is('RealVector.sub (RealVector.fromList [1.5,2.5], 1)', '2.5');
+  is('IntArray.length (IntArray.fromList [1,2,3])', '3');
+  is('IntVector.toList (IntVector.map (fn x=>x+1) (IntVector.fromList [1,2]))', '[2, 3]');
+});
+
+test('IntInf: whole numbers of any size, and a type of their own', () => {
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  const is = (src, want) => assert.equal(bml.run(src).text, want, src);
+  is('IntInf.toString (IntInf.fromInt 42)', '"42"');
+  is('IntInf.toString (IntInf.pow (IntInf.fromInt 2, 100))', '"1267650600228229401496703205376"');
+  is('IntInf.toString (IntInf.* (IntInf.fromString "123456789012345678901234567890", IntInf.fromInt 2))',
+    '"246913578024691357802469135780"');
+  is('IntInf.toString (IntInf.+ (IntInf.fromInt 1, IntInf.fromInt 2))', '"3"');
+  is('IntInf.toString (IntInf.~ (IntInf.fromInt 5))', '"~5"', 'and `op ~` can be declared at all');
+  is('IntInf.toString (IntInf.fromString "~7")', '"~7"', 'a tilde is how ML writes a negative');
+  is('IntInf.compare (IntInf.fromInt 1, IntInf.fromInt 2)', 'LESS');
+  is('IntInf.fromInt 5 = IntInf.fromInt 5', 'true');
+  is('IntInf.fromInt 5', '5');
+  is('~3', '~3', 'and a plain negative still lexes');
+
+  // A TYPE OF ITS OWN, as the Basis has it: an intinf and an int are not the
+  // same thing, and mixing them is an error rather than a coercion.
+  assert.equal(bml.typeReport('IntInf.fromInt 1'), 'intinf');
+  const mixed = bml.run('IntInf.fromInt 1 + 1');
+  assert.equal(mixed.ok, false);
+  assert.match(mixed.text, /intinf and int are not the same type/);
+});

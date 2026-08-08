@@ -240,7 +240,12 @@ export function tokenize(src) {
     if (c === '~') {
       let k = i + 1;
       while (k < n && /\s/.test(src[k])) k++;
-      if (/[0-9(a-zA-Z]/.test(src[k] || '')) { toks.push({ t: 'NEG' }); i = k; continue; }
+      // …and a closing bracket, for `op ~`: naming the operator rather than
+      // applying it. Without it `(op ~)` reached the bottom of the lexer and
+      // was reported as an unexpected character, so IntInf could not declare
+      // its negation — and a structure whose body will not parse is dropped
+      // whole, so the whole of IntInf went with it.
+      if (/[0-9(a-zA-Z)]/.test(src[k] || '')) { toks.push({ t: 'NEG' }); i = k; continue; }
     }
     if (/[A-Za-z_]/.test(c) || (c === "'" && /[A-Za-z]/.test(src[i + 1] || ''))) {
       let j = i + 1;

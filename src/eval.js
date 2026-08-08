@@ -126,6 +126,7 @@ function valuesEqual(a, b) {
   if (!a || !b || a.tag !== b.tag) return false;
   switch (a.tag) {
     case 'int': case 'real': case 'str': case 'bool': case 'char': return a.v === b.v;
+    case 'intinf': return a.v === b.v;
     case 'tuple': return a.items.length === b.items.length && a.items.every((x, i) => valuesEqual(x, b.items[i]));
     case 'list': return a.items.length === b.items.length && a.items.every((x, i) => valuesEqual(x, b.items[i]));
     case 'con': return a.name === b.name && (a.args || []).length === (b.args || []).length
@@ -1087,6 +1088,7 @@ export function formatValue(v) {
     // Standard ML writes a negative number with a tilde, not a minus: `~3`,
     // `~1.5`. The minus sign is the binary operator and nothing else.
     case 'int': return String(v.v).replace(/^-/, '~');
+    case 'intinf': return String(v.v).replace(/^-/, '~');
     case 'real': return showReal(v.v);
     case 'char': return v.v;
     case 'bool': return v.v ? 'true' : 'false';

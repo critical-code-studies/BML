@@ -79,7 +79,7 @@ export function defaultFixity() {
 const OP_SYM = {
   PLUS: '+', MINUS: '-', STAR: '*', SLASH: '/', CARET: '^',
   LT: '<', GT: '>', LE: '<=', GE: '>=', EQEQ: '=', NE: '<>', EQ: '=',
-  CONS: '::', AT: '@',
+  CONS: '::', AT: '@', NEG: '~',
 };
 // …and back to the node this parser already builds for it.
 const SYM_BIN = {

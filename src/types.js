@@ -32,6 +32,10 @@ export function con(name, args = []) { return { k: 'con', name, args }; }
 export const INT = con('int');
 export const REAL = con('real');
 export const CHAR = con('char');
+// Arbitrary precision. A separate TYPE from int, as it is in the Basis: an
+// `intinf` and an `int` are not the same thing and mixing them is an error the
+// checker should catch rather than a coercion it should perform.
+export const INTINF = con('intinf');
 // Kept as a name for the places that only care that it is a number.
 export const NUM = INT;
 // `string`, which is its name in Standard ML. It printed as `str` until v1.290,
@@ -322,6 +326,17 @@ function baseEnv() {
     // `Vector.length` read `'a array -> int` and refused every vector given to
     // it — under strict, which is the default.
     // The clock. `clocknow` takes unit because a value would be constant.
+    bigfromint: mono(fnOf(INT, INTINF)),
+    bigtoint: mono(fnOf(INTINF, INT)),
+    bigfromstring: mono(fnOf(STR, INTINF)),
+    bigtostring: mono(fnOf(INTINF, STR)),
+    bigadd: mono(fnOf(INTINF, fnOf(INTINF, INTINF))),
+    bigsub: mono(fnOf(INTINF, fnOf(INTINF, INTINF))),
+    bigmul: mono(fnOf(INTINF, fnOf(INTINF, INTINF))),
+    bigdiv: mono(fnOf(INTINF, fnOf(INTINF, INTINF))),
+    bigmod: mono(fnOf(INTINF, fnOf(INTINF, INTINF))),
+    bigpow: mono(fnOf(INTINF, fnOf(INT, INTINF))),
+    bigcmp: mono(fnOf(INTINF, fnOf(INTINF, INT))),
     wordand: mono(fnOf(INT, fnOf(INT, INT))),
     wordor: mono(fnOf(INT, fnOf(INT, INT))),
     wordxor: mono(fnOf(INT, fnOf(INT, INT))),
@@ -1142,7 +1157,7 @@ export function typeOf(ast, session = {}) {
 // Deliberately small: the base types, a list of one of them, and the datatype
 // being declared (so `Node of tree * int * tree` knows what a tree is). Anything
 // else is a fresh variable, which is no worse than before this existed.
-const BASE_TYPES = { int: () => INT, real: () => REAL, string: () => STR, str: () => STR, bool: () => BOOL, char: () => CHAR, unit: () => UNIT };
+const BASE_TYPES = { intinf: () => INTINF, int: () => INT, real: () => REAL, string: () => STR, str: () => STR, bool: () => BOOL, char: () => CHAR, unit: () => UNIT };
 function typeOfWords(ws, selfType, selfName, tyvars) {
   if (!ws || !ws.length) return fresh();
   const last = ws[ws.length - 1];
