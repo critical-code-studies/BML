@@ -1403,3 +1403,67 @@ test('one lookahead decides whether an `and` starts a binding', () => {
     bml.run('let fun ev 0 = true | ev n = od (n-1) and od 0 = false | od n = ev (n-1) in ev 4 end').text,
     'true', 'mutual recursion inside a let, which is the reason to write one');
 });
+
+test('vector literals, and the Vector structure that they exposed', () => {
+  // `#[1,2,3]`. The `#` is shared with the selector and the bracket tells them
+  // apart, as in Standard ML.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.run('#[1, 2, 3]').text, '#[1, 2, 3]');
+  assert.equal(bml.typeReport('#[1, 2, 3]'), 'int vector');
+  assert.equal(bml.run('#[]').text, '#[]');
+  assert.equal(bml.run('#1 (4, 5)').text, '4', 'the selector still selects');
+  assert.equal(bml.run('#[1,2] = #[1,2]').text, 'true', 'a vector compares structurally');
+
+  // WRITING the literal is what showed this: every member of Vector was typed
+  // `'a array -> …`, because the structure reused the array primitives and so
+  // reused their types. It RAN — the primitives accept either tag — so only the
+  // checker refused, and strict is the default. Vector was unusable.
+  assert.equal(bml.run('Vector.length #[1,2,3]').text, '3');
+  assert.equal(bml.run('Vector.sub (#[7,8,9], 1)').text, '8');
+  assert.equal(bml.run('Vector.toList #[1,2]').text, '[1, 2]');
+  assert.equal(bml.run('Vector.map (fn x => x + 1) #[1,2]').text, '#[2, 3]');
+  assert.equal(bml.run('Vector.length (Array.fromList [1,2])').ok, false,
+    'and an array is not a vector');
+});
+
+test('word literals', () => {
+  // `0w5` and `0wx1F`. A word here is a non-negative int that prints as
+  // uppercase hex, so only the lexer had to learn them.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.run('0w5').text, '5');
+  assert.equal(bml.run('0wx1F').text, '31');
+  assert.equal(bml.run('0w5 + 0w3').text, '8');
+  assert.equal(bml.run('Word.toString 0wx1F').text, '"1F"');
+  // The hex and decimal forms below it in the lexer are untouched.
+  assert.equal(bml.run('0x1F').text, '31');
+  assert.equal(bml.run('0.5').text, '0.5');
+  assert.equal(bml.run('0').text, '0');
+});
+
+test('an exception can be replicated', () => {
+  // `exception Bang = Boom` is not a new exception but another name for one, so
+  // the two must share an identity: raising either is caught by handling
+  // either, which is the only reason to write it.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('exception Boom of string');
+  bml.run('exception Bang = Boom');
+  assert.equal(bml.run('(raise Boom "x") handle Bang s => s').text, '"x"');
+  assert.equal(bml.run('(raise Bang "y") handle Boom s => s').text, '"y"');
+
+  bml.run('exception Quit');
+  bml.run('exception Halt = Quit');
+  assert.equal(bml.run('(raise Quit) handle Halt => "caught"').text, '"caught"', 'nullary too');
+
+  // A standard exception can be replicated, being an exception like any other.
+  bml.run('exception MyFail = Fail');
+  assert.equal(bml.run('(raise Fail "z") handle MyFail s => s').text, '"z"');
+  assert.equal(bml.run('exception Nope = Zzz').ok, false, 'and only an exception can be');
+
+  // An ordinary constructor pattern is unaffected by matching on the canonical
+  // name, since for anything but a replication the two are the same.
+  bml.run('datatype colour = R | G');
+  assert.equal(bml.run('case R of R => 1 | G => 2').text, '1');
+});

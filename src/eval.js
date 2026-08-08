@@ -289,6 +289,10 @@ export function evalNode(node, env, ctx, builtins) {
       continue;
     }
     case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    // `#[1, 2, 3]` — the same value `Vector.fromList [1, 2, 3]` makes. A vector
+    // compares structurally where an array has identity, which is why the two
+    // are separate tags and this is not a list.
+    case 'VectorLit': return { tag: 'vector', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
     case 'Unit': return { tag: 'unit' };
     case 'Deref': {
       const r = evalNode(node.arg, env, ctx, builtins);
@@ -323,6 +327,18 @@ export function evalNode(node, env, ctx, builtins) {
     case 'ExnDecl': {
       const store = (ctx && ctx.session) || {};
       const reg = (store.__cons = store.__cons || {});
+      // A replication binds the NEW name to the OLD exception's identity, so
+      // the two are one exception under two names, as the Definition says.
+      if (node.alias) {
+        const src = reg[node.alias];
+        if (!src) throw new RonmlError(`${node.alias} is not an exception`);
+        reg[node.name] = src;
+        (store.__exn = store.__exn || {})[node.name] = true;
+        store[nameKey(node.name)] = src.arity === 0
+          ? { tag: 'con', name: src.name, args: [] }
+          : { tag: 'confn', name: src.name, arity: src.arity, args: [] };
+        return { tag: 'exndecl', name: node.name };
+      }
       reg[node.name] = { name: node.name, arity: node.arity, of: 'exn' };
       (store.__exn = store.__exn || {})[node.name] = true;
       store[nameKey(node.name)] = node.arity === 0
@@ -829,7 +845,11 @@ function matchPattern(pat, v, ctx) {
       // A declared constructor matches by name and arity; anything else is a
       // variable, and a variable matches anything.
       if (cons[pat.name]) {
-        if (!v || (v.tag !== 'con' && v.tag !== 'confn') || v.name !== pat.name) return null;
+        // Against the constructor's CANONICAL name, not the one written here.
+        // `exception Bang = Boom` registers Bang against Boom's own entry, so
+        // `handle Bang` has to match a Boom — which is the point of writing it.
+        const canon = cons[pat.name].name || pat.name;
+        if (!v || (v.tag !== 'con' && v.tag !== 'confn') || v.name !== canon) return null;
         const got = v.args || [];
         // `P (a, b)` and `P a b` are both written for a constructor carrying two
         // things — the first is Standard ML's, the second is what this build's

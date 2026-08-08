@@ -12,7 +12,7 @@
 // because the answer changes. It found twelve gaps in one run, of which two
 // were silent wrong answers rather than absences.
 //
-// It is A CHECKLIST, not the Definition: 91 cases somebody wrote down, so a
+// It is A CHECKLIST, not the Definition: 97 cases somebody wrote down, so a
 // perfect score means every case here passes and nothing more. The corpus
 // figure is the one to quote.
 //
@@ -45,6 +45,7 @@ const CASES = [
   ['core', 'record projection #lab', ['val r = {a = 1, b = "x"}'], '#b r', '"x"'],
   ['core', 'tuple projection #n', [], '#2 (1, 2, 3)', '2'],
   ['core', 'list literal + cons', [], '1 :: [2, 3]', '[1, 2, 3]'],
+  ['core', 'vector literal', [], '#[1, 2, 3]', '#[1, 2, 3]'],
   ['core', 'append @', [], '[1] @ [2]', '[1, 2]'],
   ['core', 'sequence (e1; e2)', [], '(1; 2)', '2'],
   ['core', 'while ... do', ['val i = ref 0'], '(while !i < 3 do i := !i + 1; !i)', '3'],
@@ -97,6 +98,9 @@ const CASES = [
   ['exceptions', 'Fail carries a string', [], '(raise Fail "b") handle Fail m => m', '"b"'],
   ['exceptions', 'standard Empty', [], '(hd nil) handle Empty => 0', '0'],
   ['exceptions', 'Div', [], '(1 div 0) handle Div => ~1', '~1'],
+  ['exceptions', 'replication shares identity',
+    ['exception Boom of string', 'exception Bang = Boom'],
+    '(raise Boom "x") handle Bang s => s', '"x"'],
 
   // ---- modules ------------------------------------------------------------
   ['modules', 'structure + dot access', ['structure S = struct val k = 3 end'], 'S.k', '3'],
@@ -117,11 +121,15 @@ const CASES = [
   // ---- lexical ------------------------------------------------------------
   ['lexical', 'nested comments', [], '(* a (* b *) c *) 1', '1'],
   ['lexical', 'hex literal', [], '0x1F', '31'],
+  ['lexical', 'word literal', [], '0w5', '5'],
+  ['lexical', 'word literal, hex', [], '0wx1F', '31'],
   ['lexical', 'scientific notation', [], '1e3', '1000.0'],
   ['lexical', 'string escapes', [], 'size "a\\nb"', '3'],
   ['lexical', 'symbolic identifier', ['fun ** (a, b) = a * b', 'infix 7 **'], '3 ** 4', '12'],
 
   // ---- the Basis ----------------------------------------------------------
+  ['basis', 'Vector.length', [], 'Vector.length #[1,2,3]', '3'],
+  ['basis', 'Vector.sub', [], 'Vector.sub (#[7,8,9], 1)', '8'],
   ['basis', 'List.map', [], 'List.map (fn x => x + 1) [1, 2]', '[2, 3]'],
   ['basis', 'List.foldl', [], 'List.foldl (fn (a, b) => a + b) 0 [1,2,3]', '6'],
   ['basis', 'List.filter', [], 'List.filter (fn x => x > 1) [1,2,3]', '[2, 3]'],

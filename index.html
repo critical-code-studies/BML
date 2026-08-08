@@ -456,6 +456,9 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
          tools/sync-bml.sh says so on every sync, and docs/ROADMAP.md in NostOS
          carries the list.
 
+         Vector and word literals and exception replication came off this list
+         at 0.20.0, which is the pattern to follow.
+
          The counts that used to be here — 350/408, 91/91, 16/~47 — came off
          because they were hand-typed and sat three versions out of date. If a
          number goes back on, it needs a test that reads this file and checks it
@@ -465,19 +468,15 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
     <table class="figures">
       <tr><td>the Basis</td><td>The thinnest part. Sixteen structures. No
           <code>Date</code>, <code>Time</code>, <code>StringCvt</code>,
-          <code>IntInf</code>, <code>Word8</code> or the monomorphic arrays. No
+          <code>IntInf</code> or the monomorphic arrays. No
           <code>OS</code>, and there will not be one, since nothing behind this
           has a file system.</td></tr>
-      <tr><td>literals</td><td>Word literals (<code>0w5</code>) and vector
-          literals (<code>#[1,2,3]</code>).</td></tr>
       <tr><td>operators</td><td>An operator cannot be DEFINED in its infix form,
           <code>fun (f ** g) (x, y) = …</code>, and <code>op</code> cannot stand
           in a pattern.</td></tr>
       <tr><td>blocks</td><td><code>let … end</code> works as an operator's left
           operand but not its right, and <code>open</code> cannot appear inside
           a <code>let</code>.</td></tr>
-      <tr><td>exceptions</td><td>No replication:
-          <code>exception E = Fail</code>.</td></tr>
       <tr><td>the stack</td><td>Non-tail recursion is bounded by the host stack.
           Tail calls are proper, as the Definition requires.</td></tr>
     </table>

@@ -172,6 +172,13 @@ export const PRIMITIVES = {
       return { tag: 'list', items: a.items.slice() };
     },
   },
+  // A vector reads exactly as an array reads, and these run the same code. They
+  // exist so the CHECKER can tell them apart: `Vector.length` was typed
+  // `'a array -> int`, so every use of it on a real vector was refused, and
+  // strict is the default. It ran, which is why nothing caught it.
+  vectorsub:    { arity: 2, fn: (args) => PRIMITIVES.arraysub.fn(args) },
+  vectorlength: { arity: 1, fn: (args) => PRIMITIVES.arraylength.fn(args) },
+  vectortolist: { arity: 1, fn: (args) => PRIMITIVES.arraytolist.fn(args) },
   vectorfromlist: {
     arity: 1,
     fn: ([l]) => {

@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.19.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.20.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -36,7 +36,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.19.0, a little Standard ML
+BML 0.20.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -84,8 +84,8 @@ from Robert Harper's *Introduction to Standard ML* course, this build runs
 node tools/isml-conformance.mjs
 ```
 
-And against a checklist of the Definition — 91 features, one case each, passing
-only on an exact match — it scores **91/91**:
+And against a checklist of the Definition — 97 features, one case each, passing
+only on an exact match — it scores **97/97**:
 
 ```
 node tools/sml-checklist.mjs

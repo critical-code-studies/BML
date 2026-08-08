@@ -868,6 +868,18 @@ export function parse(toks, fixityIn) {
     // #label r selects a field; #1 p selects from a tuple, counting from one.
     if (tok.t === 'HASH') {
       p++;
+      // `#[1, 2, 3]` is a vector, not a selector. The two share the `#` and are
+      // told apart by the bracket, which is how Standard ML reads them.
+      if (peek().t === 'LB') {
+        p++;
+        const items = [];
+        if (peek().t !== 'RB') {
+          items.push(parseExpr());
+          while (peek().t === 'COMMA') { p++; items.push(parseExpr()); }
+        }
+        eat('RB');
+        return { type: 'VectorLit', items };
+      }
       const sel = peek().t === 'NUM' ? String(eat('NUM').v) : eat('IDENT').v;
       return { type: 'Select', label: sel };
     }
@@ -1077,6 +1089,13 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'exception')) {
       p++;
       const nameTok = eat('IDENT');
+      // `exception E = Fail` — a REPLICATION. Not a new exception but another
+      // name for one that exists, so it has to share the identity: `handle E`
+      // catching a Fail is the whole reason to write it.
+      if (peek().t === 'EQ') {
+        p++;
+        return { type: 'ExnDecl', name: nameTok.v, alias: eat('IDENT').v };
+      }
       let arity = 0;
       const shape = {};
       if (isKeyword(peek(), 'of')) { p++; arity = skipTypeExpr(shape); }

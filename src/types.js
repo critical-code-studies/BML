@@ -121,7 +121,8 @@ function isSyntacticValue(node) {
     case 'Var': case 'Lam':
       return true;
     case 'Tuple': return (node.items || []).every(isSyntacticValue);
-    case 'ListLit': return (node.items || []).every(isSyntacticValue);
+    case 'ListLit':
+    case 'VectorLit': return (node.items || []).every(isSyntacticValue);
     case 'Record': return (node.fields || []).every((f) => isSyntacticValue(f.value));
     default: return false;   // App, Deref, Assign, If, Case, Let: not values
   }
@@ -259,6 +260,12 @@ function baseEnv() {
     arrayupdate: scheme([a.id], fnOf(con('array', [a]), fnOf(INT, fnOf(a, UNIT)))),
     arraylength: scheme([a.id], fnOf(con('array', [a]), INT)),
     arraytolist: scheme([a.id], fnOf(con('array', [a]), listOf(a))),
+    // The vector three. Sharing the array prims meant sharing their TYPES, so
+    // `Vector.length` read `'a array -> int` and refused every vector given to
+    // it — under strict, which is the default.
+    vectorsub: scheme([a.id], fnOf(con('vector', [a]), fnOf(INT, a))),
+    vectorlength: scheme([a.id], fnOf(con('vector', [a]), INT)),
+    vectortolist: scheme([a.id], fnOf(con('vector', [a]), listOf(a))),
   };
 }
 
@@ -553,6 +560,12 @@ export function infer(node, env, cons) {
       const e = fresh();
       for (const it of node.items) unify(infer(it, env, cons), e);
       return listOf(e);
+    }
+
+    case 'VectorLit': {
+      const e = fresh();
+      for (const it of node.items) unify(infer(it, env, cons), e);
+      return con('vector', [e]);
     }
 
     case 'Tuple': return tupleOf(node.items.map((i) => infer(i, env, cons)));

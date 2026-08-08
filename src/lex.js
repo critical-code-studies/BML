@@ -165,6 +165,22 @@ export function tokenize(src) {
       continue;
     }
     if (/[0-9]/.test(c)) {
+      // A WORD, which Standard ML writes 0w5 and 0wx1F. `Word` here holds a
+      // non-negative int and prints as uppercase hex, so the literal only has
+      // to reach the lexer: nothing downstream needs a tag of its own.
+      // Checked before the hex branch, since `0wx…` begins with `0w`.
+      if (src[i] === '0' && (src[i + 1] === 'w' || src[i + 1] === 'W')) {
+        const hex = src[i + 2] === 'x' || src[i + 2] === 'X';
+        const from = i + (hex ? 3 : 2);
+        const digits = hex ? /[0-9a-fA-F]/ : /[0-9]/;
+        if (digits.test(src[from] || '')) {
+          let w = from;
+          while (w < n && digits.test(src[w])) w++;
+          toks.push({ t: 'NUM', v: parseInt(src.slice(from, w), hex ? 16 : 10), real: false });
+          i = w;
+          continue;
+        }
+      }
       // Hexadecimal, which Standard ML writes 0x1F.
       if (src[i] === '0' && (src[i + 1] === 'x' || src[i + 1] === 'X') && /[0-9a-fA-F]/.test(src[i + 2] || '')) {
         let h = i + 2;
