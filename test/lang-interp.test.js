@@ -1501,3 +1501,28 @@ test('a machine given no clock says so', () => {
   assert.equal(bml.run('Time.toSeconds (Time.fromSeconds 5)').text, '5');
   assert.equal(bml.run('Date.toString (Date.fromTimeUniv 0)').text, '"Thu Jan 01 00:00:00 1970"');
 });
+
+test('an unbound name offers what the reader probably meant', () => {
+  // "ERR: unbound variable: date" is true and useless. Standard ML tells `date`
+  // and `Date` apart, so a reader who typed the first meant the second, and the
+  // machine can see that.
+  const bml = createInterpreter({ typecheck: 'off', clock: () => 0 });
+  bml.loadPrelude();
+  const say = (src) => bml.run(src).text;
+
+  assert.match(say('date'), /did you mean Date\?/);
+  assert.match(say('date'), /tells capitals apart/);
+  // A word carried in from another language.
+  assert.match(say('var f = 1'), /Standard ML writes val/);
+  assert.match(say('function f x = x'), /Standard ML writes fun/);
+  assert.match(say('return 1'), /a function IS its last expression/);
+  // A typing slip, including the transposition, which is the commonest one.
+  assert.match(say('lenght [1,2]'), /did you mean length\?/);
+  assert.match(say('prnt "x"'), /did you mean print\?/);
+  // A qualified name misses on its structure more often than on its member.
+  assert.match(say('Lst.map'), /no structure Lst — did you mean List\?/);
+  // And when there is nothing sensible to say, it says nothing.
+  assert.equal(say('zqxjw'), 'ERR: unbound variable: zqxjw');
+  // A name that IS bound is unaffected.
+  assert.equal(bml.run('val x = 1').ok, true);
+});

@@ -650,7 +650,7 @@ function makeSession(announce) {
     write('Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.', 'p');
     write('');
     write(strict.checked ? 'strict: use typecheck' : 'advisory: a clash is named, the line runs', 'p');
-    write('Type help for the forms.', 'p');
+    write('Type help for more info.', 'p');
     write('');
   }
 }
@@ -660,7 +660,10 @@ function runLine(line, echo = true) {
   const text = String(line);
   if (echo) write('- ' + text, 'i');
   if (!text.trim()) return;
-  if (text.trim() === 'help') { showHelp(); return; }
+  // `help` is THIS PAGE's command, not a name in the language, so `help date`
+  // used to reach the interpreter and come back as "unbound variable: help".
+  // Anything beginning with the word is the same request.
+  if (/^help\b/.test(text.trim())) { showHelp(); return; }
 
   const t = /^\s*:t\s+([\s\S]+)$/.exec(text);
   if (t) {

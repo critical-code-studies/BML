@@ -21,7 +21,7 @@ import { tokenize } from './lex.js';
 import { parse, joinProgramLines } from './parse.js';
 import { evalNode, formatValue, combineOutput, beginRun, setOut } from './eval.js';
 import { typeOf, remember } from './types.js';
-import { diagnose } from './diag.js';
+import { diagnose, suggestName } from './diag.js';
 import { PRELUDE, PRELUDE_EXACT } from './basis.js';
 import { PRIMITIVES } from './prims.js';
 
@@ -241,6 +241,32 @@ export function createInterpreter(opts = {}) {
     }
   }
 
+
+  // The vocabulary a reader could have meant. Everything bound lives in the
+  // session, so this is the library and their own bindings both.
+  function knownNames() {
+    const out = new Set();
+    for (const k of Object.keys(session)) {
+      if (k.startsWith('__')) continue;
+      // A structure's members are held under their QUALIFIED names, so the
+      // structure's own name has to be recovered from them: without this,
+      // `date` could not be told it meant `Date`, which is the case that
+      // started this.
+      const dot = k.indexOf('.');
+      if (dot > 0) out.add(k.slice(0, dot));
+      else out.add(k);
+    }
+    // The top-level names are primitives and never reach the session.
+    for (const k of Object.keys(PRIMITIVES)) out.add(k);
+    return [...out];
+  }
+
+  /** "unbound variable: date" plus, where there is one, what to try instead. */
+  function unboundText(name) {
+    const hint = suggestName(name, knownNames());
+    return hint ? `ERR: unbound variable: ${name} — ${hint}` : `ERR: unbound variable: ${name}`;
+  }
+
   function run(source, hostCtx) {
     // The host's context travels untouched to every builtin. The interpreter
     // adds only what the language itself needs to find: the session it is
@@ -295,7 +321,7 @@ export function createInterpreter(opts = {}) {
           // means "let it through", which is what a machine's own program wants,
           // where a bare word is the intent it chose.
           if (said) return { ok: false, text: `ERR: ${said}` };
-          if (said === undefined) return { ok: false, text: `ERR: unbound variable: ${ast.name}` };
+          if (said === undefined) return { ok: false, text: unboundText(ast.name) };
         }
       }
 
@@ -346,6 +372,10 @@ export function createInterpreter(opts = {}) {
       // choked on and that helps nobody.
       const why = diagnose(source);
       if (why) return { ok: false, text: `ERR: ${why}` };
+      // An unbound name thrown from anywhere inside the line gets the same
+      // help as one typed on its own.
+      const un = /^unbound variable: ([A-Za-z_'][\w'.]*)$/.exec(e && e.message);
+      if (un) return { ok: false, text: unboundText(un[1]) };
       if (e instanceof RonmlError) return { ok: false, text: `ERR: ${e.message}` };
       return { ok: false, text: `ERR: ${e.message || 'malformed command'}` };
     }

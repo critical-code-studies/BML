@@ -207,7 +207,7 @@ function banner() {
     sloppy
       ? 'advisory: a clash is named and the line runs anyway.'
       : 'strict: use typecheck',
-    'Type help for the forms, :quit to leave.',
+    'Type help for more info, :quit to leave.',
     '------------------------------------------------------------',
     '',
   ].join('\n');
@@ -268,7 +268,9 @@ function step(src) {
   const line = String(src).trim();
   if (!line) return true;
   if (line === ':quit' || line === ':q') return null;
-  if (line === 'help' || line === ':help' || line === '?') { console.log(HELP); return true; }
+  // Anything beginning with `help` is the same request: `help date` reached the
+  // interpreter and came back as "unbound variable: help", which helps nobody.
+  if (/^(help\b|:help$|\?$)/.test(line)) { console.log(HELP); return true; }
   if (line.startsWith(':t ')) {
     const t = bml.typeReport(line.slice(3));
     console.log(t || 'no type: the checker could not read that');
