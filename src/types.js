@@ -322,6 +322,13 @@ function baseEnv() {
     // `Vector.length` read `'a array -> int` and refused every vector given to
     // it — under strict, which is the default.
     // The clock. `clocknow` takes unit because a value would be constant.
+    wordand: mono(fnOf(INT, fnOf(INT, INT))),
+    wordor: mono(fnOf(INT, fnOf(INT, INT))),
+    wordxor: mono(fnOf(INT, fnOf(INT, INT))),
+    wordnot: mono(fnOf(INT, INT)),
+    wordshl: mono(fnOf(INT, fnOf(INT, INT))),
+    wordshr: mono(fnOf(INT, fnOf(INT, INT))),
+    wordashr: mono(fnOf(INT, fnOf(INT, INT))),
     clocknow: mono(fnOf(UNIT, INT)),
     clockparts: mono(fnOf(INT, tupleOf([INT, INT, INT, INT, INT, INT, INT]))),
     vectorsub: scheme([a.id], fnOf(con('vector', [a]), fnOf(INT, a))),

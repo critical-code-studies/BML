@@ -1923,3 +1923,45 @@ test('StringCvt, and the constructor payload it exposed', () => {
   bml.run('datatype lb = LB of string list');
   assert.equal(bml.typeReport('LB'), 'string list -> lb', 'and list is unaffected');
 });
+
+test('every member of every structure is actually bound', () => {
+  // A STRUCTURE THAT FAILS TO LOAD IS DROPPED IN SILENCE — one member that will
+  // not type does not stop the rest, which is right for a console but means an
+  // absent structure says nothing at all. The monomorphic arrays were written
+  // before Array and Vector in the prelude, and since `val fromList =
+  // Vector.fromList` is evaluated where it stands, all eight bound NOTHING and
+  // the only sign was a member that could not be found later.
+  const bml = createInterpreter({ typecheck: 'off', clock: () => 0 });
+  bml.loadPrelude();
+  const members = {};
+  for (const k of Object.keys(bml.session)) {
+    const dot = k.indexOf('.');
+    if (dot <= 0 || k.startsWith('__')) continue;
+    const m = k.slice(dot + 1);
+    if (m.includes('.')) continue;
+    (members[k.slice(0, dot)] = members[k.slice(0, dot)] || []).push(m);
+  }
+  const names = Object.keys(members).sort();
+  assert.ok(names.length >= 28, `28 structures or more, found ${names.length}`);
+  // The ones that must be there, by name, so a structure quietly vanishing is
+  // a failure rather than a smaller number nobody reads.
+  for (const s of ['Array', 'Bool', 'Char', 'CharArray', 'CharVector', 'Date', 'General',
+    'Int', 'IntArray', 'IntVector', 'List', 'ListPair', 'Math', 'Option', 'Real',
+    'RealArray', 'RealVector', 'String', 'StringCvt', 'Substring', 'TextIO', 'Time',
+    'Vector', 'Word', 'Word8', 'Word8Array', 'Word8Vector']) {
+    assert.ok(members[s], `${s} is missing from the prelude`);
+  }
+  // Bound is what is asserted, not that it evaluates: naming a primitive-backed
+  // function bare answers "needs more arguments", which is not a fault.
+  let total = 0;
+  for (const s of names) {
+    for (const m of members[s]) {
+      total++;
+      const t = String(bml.run(`${s}.${m}`).text || '');
+      assert.ok(!/unbound variable/.test(t), `${s}.${m} is not bound`);
+    }
+  }
+  assert.ok(total >= 400, `400 members or more, found ${total}`);
+  // And OS stays out for good: nothing behind this has a file system.
+  assert.equal(members.OS, undefined, 'OS is deliberately absent');
+});

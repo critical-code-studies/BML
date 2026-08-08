@@ -36,6 +36,11 @@ function raiseStd(name, why) {
 import { describeValue, formatValue, pushOut } from './eval.js';
 
 const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
+/** A whole number out of a value, or a refusal naming what arrived instead. */
+const intOf = (x) => {
+  if (!x || x.tag !== 'int') throw new RonmlError(`${describeValue(x)} is not a word`);
+  return x.v;
+};
 
 export const PRIMITIVES = {
   // ANY value as the text it prints as. The prelude used to write `"" ^ n` for
@@ -176,6 +181,19 @@ export const PRIMITIVES = {
   // exist so the CHECKER can tell them apart: `Vector.length` was typed
   // `'a array -> int`, so every use of it on a real vector was refused, and
   // strict is the default. It ran, which is why nothing caught it.
+  // BITWISE. Word's operators, and Word8's. JavaScript's own are 32-bit and
+  // signed, so `>>> 0` puts each answer back in the unsigned range a word is:
+  // `notb 0w0` is 4294967295, not ~1.
+  wordand: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: (intOf(a) & intOf(b)) >>> 0 }) },
+  wordor:  { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: (intOf(a) | intOf(b)) >>> 0 }) },
+  wordxor: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: (intOf(a) ^ intOf(b)) >>> 0 }) },
+  wordnot: { arity: 1, fn: ([a]) => ({ tag: 'int', v: (~intOf(a)) >>> 0 }) },
+  wordshl: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: (intOf(a) << intOf(b)) >>> 0 }) },
+  // `>>` on a word is LOGICAL — a word has no sign — and `~>>` is arithmetic,
+  // which is what the tilde in its name says.
+  wordshr: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: intOf(a) >>> intOf(b) }) },
+  wordashr: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: (intOf(a) >> intOf(b)) >>> 0 }) },
+
   // THE CLOCK. Milliseconds since 1970, from the host or not at all.
   clocknow: {
     arity: 1,

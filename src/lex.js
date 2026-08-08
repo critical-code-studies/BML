@@ -248,6 +248,13 @@ export function tokenize(src) {
       // (factory_id.ml, readme.md) — evalNode tags anything ending .ml/.md a file.
       // `-` is NOT: it is the subtraction operator now (codes/filenames underscore).
       while (j < n && /[A-Za-z0-9_.']/.test(src[j])) j++;
+      // A structure's member may be SYMBOLIC: `Word.<<`, `Word8.~>>`. The run
+      // above stops at the `<`, which left `Word.` as one token and `<<` as the
+      // next, so the member could not be reached at all — Word's shift
+      // operators were unbindable and unusable.
+      if (src[j - 1] === '.' && SYMBOLIC.test(src[j] || '')) {
+        while (j < n && SYMBOLIC.test(src[j])) j++;
+      }
       toks.push({ t: 'IDENT', v: src.slice(i, j) });
       i = j;
       continue;
