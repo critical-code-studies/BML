@@ -18,6 +18,12 @@
 //
 // Each case is [area, what, setup lines, the expression, the SML answer], and
 // passes only on an exact match.
+//
+// WHAT IT CANNOT SEE: it compares ANSWERS. A defect that gives the right value
+// under the wrong type is invisible here — `fun f () = 5` reported `'a -> int`
+// for a long time and `f ()` answered 5 throughout. Three cases written for
+// that were removed again on finding they passed against the broken checker
+// too. Those belong in the unit tests, which can ask for a type.
 
 import { createInterpreter } from '../src/interp.js';
 

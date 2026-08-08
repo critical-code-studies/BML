@@ -323,6 +323,11 @@ let CURRENT_CONARITY = {};
 function inferPattern(pat, binds, cons) {
   switch (pat.p) {
     case 'wild': return fresh();
+    // `fun f () = …`. Without this the parameter took a fresh variable, so the
+    // function reported `'a -> t` and `f 7` was let through the checker to fail
+    // at RUN time with an unmatched pattern. Standard ML refuses it where it is
+    // written.
+    case 'unit': return UNIT;
     case 'num': return pat.real ? REAL : INT;
     case 'char': return CHAR;
     case 'str': return STR;
@@ -875,7 +880,29 @@ export function infer(node, env, cons) {
       const inner = { ...env };
       const members = {};
       for (const d of node.decls || []) {
-        if (!d || d.type !== 'TopLet') { try { infer(d, inner, cons); } catch { /* a member this module cannot type is not an error in the structure */ } continue; }
+        if (!d || d.type !== 'TopLet') {
+          try { infer(d, inner, cons); } catch { /* a member this module cannot type is not an error in the structure */ }
+          // A DATATYPE DECLARED IN HERE introduces names, and they were going
+          // nowhere: `structure Pal = struct datatype hue = Red end` published
+          // Pal's values and not its constructors, so `Pal.Red` reported `'a`
+          // — and so did every member of the structure that MENTIONED Red,
+          // since the constructor was unknown inside the body too. The `Decls`
+          // branch above has done this since v1.307; a structure is the same
+          // problem and did not.
+          if (d.type === 'Datatype' || d.type === 'TypeAbbrev') {
+            const scratch = {};
+            try { remember(d, scratch, UNIT); } catch { /* not this module's */ }
+            for (const k of Object.keys(scratch.__contypes || {})) {
+              cons[k] = scratch.__contypes[k];
+              inner[k] = scratch.__contypes[k];
+              members[k] = scratch.__contypes[k];
+            }
+            for (const k of Object.keys(scratch.__datacons || {})) CURRENT_DATACONS[k] = scratch.__datacons[k];
+            for (const k of Object.keys(scratch.__conarity || {})) CURRENT_CONARITY[k] = scratch.__conarity[k];
+            for (const k of Object.keys(scratch.__abbrevs || {})) CURRENT_ABBREVS[k] = scratch.__abbrevs[k];
+          }
+          continue;
+        }
         try {
           // BIND THE MEMBER'S OWN NAME FIRST, exactly as 'TopLet' does above.
           // Every function in the Basis is recursive — `fun map f nil = nil |

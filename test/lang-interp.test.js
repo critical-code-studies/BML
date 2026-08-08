@@ -1589,3 +1589,40 @@ test('a short name gets no guess, and a member inside a structure gets pointed a
   // And a name that is neither gets nothing rather than a guess.
   assert.equal(say('zqxjw'), 'ERR: unbound variable: zqxjw');
 });
+
+test('a `()` parameter is unit, not a fresh variable', () => {
+  // `fun f () = 5` reported `'a -> int`, because inferPattern had no case for
+  // the unit pattern and fell through to a fresh variable. So `f 7` was let
+  // past the checker to fail at RUN time with an unmatched pattern, where
+  // Standard ML refuses it where it is written.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  bml.run('fun u1 () = 5');
+  assert.equal(bml.typeReport('u1'), 'unit -> int');
+  assert.equal(bml.run('u1 ()').text, '5');
+  const bad = bml.run('u1 7');
+  assert.equal(bad.ok, false);
+  assert.match(bad.text, /unit and int are not the same type/);
+  // Every function in the library that takes unit gains the same.
+  assert.equal(bml.typeReport('Time.now'), 'unit -> int');
+});
+
+test('a datatype declared inside a structure publishes its constructors', () => {
+  // `Date.Wed` reported `'a`. A structure's member walk collected its VALUES
+  // and not the constructors of a datatype declared in it, so they were unknown
+  // both outside the structure and inside its own body.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  bml.run('structure Pal = struct datatype hue = Red | Blue of int val n = 1 end');
+  assert.equal(bml.typeReport('Pal.Red'), 'hue');
+  assert.equal(bml.typeReport('Pal.Blue'), 'int -> hue');
+  assert.equal(bml.typeReport('Pal.n'), 'int', 'and a plain value is unaffected');
+  // The library's own, which is where this was reported.
+  assert.equal(bml.typeReport('Date.Wed'), 'weekday');
+  assert.equal(bml.typeReport('Date.Jan'), 'month');
+  assert.equal(bml.run('Date.Wed').text, 'Wed');
+  // A top-level datatype was always fine; assert it stays so.
+  bml.run('datatype colour = R | G of int');
+  assert.equal(bml.typeReport('R'), 'colour');
+  assert.equal(bml.typeReport('G'), 'int -> colour');
+});
