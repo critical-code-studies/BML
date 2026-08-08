@@ -1,0 +1,53 @@
+{
+  "_note": "The manifest the web page reads, and the one test/examples.test.js walks in BOTH directions: a file not listed here goes red, and a listing with no file goes red too. Categories are in teaching order.",
+  "categories": [
+    { "name": "First steps",
+      "files": [
+        ["01-values.ml", "values"],
+        ["02-bindings.ml", "bindings and scope"],
+        ["03-strings.ml", "strings and characters"],
+        ["04-functions.ml", "functions"],
+        ["05-choice.ml", "truth and choice"]
+      ] },
+    { "name": "Recursion",
+      "files": [
+        ["06-recursion.ml", "recursion"],
+        ["07-patterns.ml", "patterns"],
+        ["08-accumulators.ml", "accumulators"],
+        ["09-mutual.ml", "two functions that need each other"],
+        ["10-collatz.ml", "the Collatz sequence"]
+      ] },
+    { "name": "Lists",
+      "files": [
+        ["11-lists.ml", "lists"],
+        ["12-higher-order.ml", "map, filter and fold"],
+        ["13-sorting.ml", "sorting"],
+        ["14-pairs.ml", "two lists at once"],
+        ["15-run-length.ml", "run-length encoding"],
+        ["16-primes.ml", "primes"]
+      ] },
+    { "name": "Types of your own",
+      "files": [
+        ["17-datatypes.ml", "datatypes"],
+        ["18-options.ml", "option, and no null"],
+        ["19-trees.ml", "binary search trees"],
+        ["20-expressions.ml", "an expression evaluator"],
+        ["21-stack-machine.ml", "a stack machine"],
+        ["22-records.ml", "records"]
+      ] },
+    { "name": "Modules",
+      "files": [
+        ["23-structures.ml", "structures"],
+        ["24-signatures.ml", "signatures, and hiding"],
+        ["25-functors.ml", "functors"],
+        ["26-dictionary.ml", "a dictionary over any key"]
+      ] },
+    { "name": "Programs",
+      "files": [
+        ["27-fizzbuzz.ml", "FizzBuzz, three ways"],
+        ["28-eight-queens.ml", "eight queens"],
+        ["29-life.ml", "Conway's Life"],
+        ["30-turing.ml", "a Turing machine"]
+      ] }
+  ]
+}

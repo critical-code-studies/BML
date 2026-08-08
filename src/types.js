@@ -186,6 +186,19 @@ export function recordOf(labels, types) {
 // machine senses) are left polymorphic on purpose: they reach into a world this
 // module knows nothing about, so a type for them would be a guess. A fresh
 // variable says "anything", which is accurate.
+// Infer one DECLARATION, pre-binding its own name when it is a function, the
+// way the 'TopLet' case does. Shared by `local`, which types two runs of
+// declarations rather than an expression.
+function inferDecl(d, env, cons) {
+  if (!d || d.type !== 'TopLet') { try { return infer(d, env, cons); } catch { return UNIT; } }
+  const isFn = d.value && d.value.type === 'Lam';
+  const v = fresh();
+  const scope = isFn ? { ...env, [nameKey(d.name)]: mono(v) } : env;
+  const t = infer(d.value, scope, cons);
+  if (isFn) unify(v, t);
+  return t;
+}
+
 function baseEnv() {
   const a = fresh();
   const b = fresh();
@@ -634,6 +647,16 @@ export function infer(node, env, cons) {
       unify(inferPattern(node.pat, binds, cons), t);
       const env2 = { ...env };
       for (const k of Object.keys(binds)) env2[k] = generalise(env, binds[k]);
+      // WHAT THE PATTERN BOUND, left on the node for `remember` to publish.
+      // There was no case for TopLetPat in `remember` at all, so a pattern
+      // binding told the checker nothing: `val (a, b) = (1, 2)` bound both
+      // names in the evaluator and neither in the checker, and under strict —
+      // the default — every use of `a` afterwards was refused as unbound. The
+      // third hole of this shape, after `Decls` and `local`.
+      if (node.type === 'TopLetPat') {
+        node.__binds = {};
+        for (const k of Object.keys(binds)) node.__binds[k] = generalise(env, binds[k]);
+      }
       return node.type === 'TopLetPat' ? t : infer(node.body, env2, cons);
     }
 
@@ -683,6 +706,36 @@ export function infer(node, env, cons) {
     // is what a functor is for.
     // `structure Q = Queue`. Nothing to infer: the members already have types
     // under the old name, and `remember` copies them to the new one.
+    // `local d1 in d2 end`. The hidden declarations are typed so the shown ones
+    // can use them, and only the shown ones are left on the node for `remember`
+    // to publish. There was NO case for this at all, so the checker learned
+    // nothing from either half: the evaluator bound the shown names and the
+    // checker did not, and under strict — the command line's default — a
+    // `local` block declared its names and then refused every one of them.
+    // Same hole as `Decls` had, in a different shape.
+    case 'Local': {
+      let inner = { ...env };
+      const bind = (d, t) => {
+        if (d && d.type === 'TopLet') {
+          inner = { ...inner, [nameKey(d.name)]: generalise(env, t) };
+        }
+      };
+      for (const d of node.hidden || []) {
+        if (!d) continue;
+        const t = inferDecl(d, inner, cons);
+        bind(d, t);
+      }
+      const members = {};
+      for (const d of node.shown || []) {
+        if (!d) continue;
+        const t = inferDecl(d, inner, cons);
+        d.__t = t;
+        bind(d, t);
+        members[d && d.name ? nameKey(d.name) : ''] = t;
+      }
+      return UNIT;
+    }
+
     case 'StructAlias': return UNIT;
 
     case 'StructApply': {
@@ -748,6 +801,21 @@ export function infer(node, env, cons) {
     // members, because `remember` is where the session learns anything.
     case 'Decls': {
       let inner = { ...env };
+      // AN `and`-CHAIN IS MUTUALLY RECURSIVE, which is the reason to write one:
+      // `fun even 0 = true | even n = odd (n-1) and odd …` needs `odd` in scope
+      // while `even`'s body is read. So every function in the chain is bound
+      // before any body is looked at. A `;` run is NOT a chain — those are
+      // separate declarations, each seeing only what came before it — so this
+      // is for the simultaneous case alone.
+      const recVars = {};
+      if (!node.sequential) {
+        for (const d of node.items || []) {
+          if (d && d.type === 'TopLet' && d.value && d.value.type === 'Lam') {
+            recVars[nameKey(d.name)] = fresh();
+            inner = { ...inner, [nameKey(d.name)]: mono(recVars[nameKey(d.name)]) };
+          }
+        }
+      }
       for (const d of node.items || []) {
         if (!d) continue;
         {
@@ -758,6 +826,8 @@ export function infer(node, env, cons) {
           // would if the declaration stood alone. With the catch,
           // `type ct = int; val w : ct = "s"` ran.
           const t = infer(d, inner, cons);
+          // Tie the chain's own name to what its body turned out to be.
+          if (d.type === 'TopLet' && recVars[nameKey(d.name)]) unify(recVars[nameKey(d.name)], t);
           d.__t = t;
           // SEQUENTIAL runs (`;`, and an abstype with-block) let each item see
           // what the ones before it declared. An `and`-chain is simultaneous,
@@ -997,6 +1067,14 @@ export function remember(ast, session, t) {
     // `List.map` is ONE Var node whose name contains a dot, not a selection.
     for (const k of Object.keys(ast.__members)) {
       session.__types[`${nameKey(ast.name)}.${k}`] = ast.__members[k];
+    }
+  } else if (ast.type === 'TopLetPat' && ast.__binds) {
+    if (!session.__types) session.__types = {};
+    for (const k of Object.keys(ast.__binds)) session.__types[k] = ast.__binds[k];
+  } else if (ast.type === 'Local') {
+    // Only the SHOWN half escapes, which is what `local` is for.
+    for (const d of ast.shown || []) {
+      if (d && d.__t !== undefined) remember(d, session, d.__t);
     }
   } else if (ast.type === 'Decls') {
     // Each item on its own, with the type `infer` left on it above.

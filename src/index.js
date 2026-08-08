@@ -27,7 +27,7 @@ export const BML_NAME = 'BML';
 // `value`, then gained `printing`, then `primitives`), so 2.7 would have
 // claimed two major versions of a settled interface that has never existed.
 // The language's own lineage belongs in the history and the README, not here.
-export const BML_VERSION = '0.14.0';
+export const BML_VERSION = '0.15.0';
 
 export const BML_CREDIT = [
   'BML created by David M. Berry, 2026.',

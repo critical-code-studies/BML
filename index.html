@@ -220,7 +220,8 @@
   #src {
     /* Paper, not phosphor: a flat field with a margin rule down its left edge,
        so a glance tells you which of the two you are typing into. */
-    width: 100%; min-height: 11rem; resize: vertical; font: inherit; font-size: 13.5px;
+    width: 100%; min-height: 13rem; resize: vertical; font: inherit; font-size: 11.5px;
+    line-height: 1.55;
     background: var(--case); color: var(--fg);
     border: 1px solid var(--rule); border-left: 3px solid var(--rule);
     border-radius: 2px; padding: .7rem .8rem;
@@ -321,10 +322,10 @@
 </div>
 
 <details class="prog" id="lib">
-  <summary><span class="chev" aria-hidden="true">▸</span>ML Library<span class="hint">nine programs to read, edit and run</span></summary>
+  <summary><span class="chev" aria-hidden="true">▸</span>ML Library<span class="hint">thirty programs to read, edit and run</span></summary>
   <div class="prog-head">
     <span class="sp"></span>
-    <select id="ex" aria-label="Load an example"><option value="">load an example…</option></select>
+    <select id="ex" aria-label="Load an example"><option value="">load one of thirty…</option></select>
     <button class="go" id="btn-run">run</button>
   </div>
   <textarea id="src" spellcheck="false" aria-label="program"></textarea>
@@ -681,21 +682,28 @@ function runProgram(text) {
 }
 
 // ---- the examples -----------------------------------------------------------
-for (const [file, title] of [
-  ['01-first-steps.ml',    'first steps'],
-  ['02-functions.ml',      'functions'],
-  ['03-lists.ml',          'lists'],
-  ['04-your-own-types.ml', 'types of your own'],
-  ['05-fizzbuzz.ml',       'fizzbuzz'],
-  ['06-fun-and-games.ml',  'fun and games'],
-  ['07-modules.ml',        'modules'],
-  ['08-sorting.ml',        'sorting'],
-  ['09-eight-queens.ml',   'eight queens'],
-]) {
-  const o = document.createElement('option');
-  o.value = file; o.textContent = title;
-  exSel.appendChild(o);
-}
+//
+// Read from examples/index.json rather than written out here. A list in this
+// file would be a second place to keep in step, and the one that goes stale:
+// the test walks the manifest against the directory both ways, and it cannot
+// walk a list buried in a page.
+fetch('./examples/index.json')
+  .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+  .then((manifest) => {
+    for (const cat of manifest.categories) {
+      const group = document.createElement('optgroup');
+      group.label = cat.name;
+      for (const [file, title] of cat.files) {
+        const o = document.createElement('option');
+        o.value = file;
+        o.textContent = title;
+        group.appendChild(o);
+      }
+      exSel.appendChild(group);
+    }
+  })
+  .catch(() => write('could not read the example list. It is in the repository.', 'e'));
+
 exSel.addEventListener('change', async () => {
   const file = exSel.value;
   if (!file) return;
@@ -703,6 +711,7 @@ exSel.addEventListener('change', async () => {
     const res = await fetch('./examples/' + file);
     if (!res.ok) throw new Error(String(res.status));
     src.value = await res.text();
+    document.getElementById('lib').open = true;
     src.focus();
   } catch {
     write(`could not read ${file}. The examples are in the repository.`, 'e');

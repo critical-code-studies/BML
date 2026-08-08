@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.14.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.15.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -36,7 +36,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.14.0, a little Standard ML
+BML 0.15.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -113,6 +113,11 @@ into a gitignored cache; it is **not** in this repository and is not
 redistributed here.
 
 ## Examples
+
+Thirty programs in `examples/`, in six categories in teaching order: first
+steps, recursion, lists, types of your own, modules, and programs. The last
+runs FizzBuzz three ways, eight queens, Conway's Life, and a Turing machine in
+forty lines. All thirty run under the default strict checker.
 
 Nine of them, simple to less so, in [examples/](examples/). Each runs on its own
 under the default checker:

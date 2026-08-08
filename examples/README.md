@@ -1,77 +1,76 @@
 # Examples
 
-Each file runs on its own and prints what it bound:
+Thirty programs, in teaching order. Each runs on its own and prints what it
+bound:
 
 ```
-bml examples/01-first-steps.ml
+bml examples/01-values.ml
 ```
 
 Or read one in at the prompt and poke at what it leaves behind:
 
 ```
 $ bml
-- use "examples/08-sorting.ml";
+- use "examples/13-sorting.ml";
 - quicksort [9, 1, 5]
 val it = [1, 5, 9] : int list
 ```
 
-They run under the default strict checker, so everything here typechecks as
-well as evaluating. If you want to watch a type go wrong, edit one and rerun.
+They all run under the default strict checker, so everything here typechecks
+as well as evaluating. If you want to watch a type go wrong, edit one and run
+it again.
 
-| | |
-|---|---|
-| `01-first-steps.ml` | values, arithmetic, why `int` and `real` do not mix |
-| `02-functions.ml` | clauses, currying, functions as values, composition |
-| `03-lists.ml` | writing `map`, `filter` and `foldl` yourself from `nil` and `::` |
-| `04-your-own-types.ml` | `datatype`, pattern matching, an expression evaluator |
-| `05-fizzbuzz.ml` | the traditional one, with no loop in it |
-| `06-fun-and-games.ml` | Fibonacci, Collatz, roman numerals, palindromes, Caesar |
-| `07-modules.ml` | a queue, a signature that hides a name, a functor |
-| `08-sorting.ml` | insertion, quick and merge sort, over numbers *and* words |
-| `09-eight-queens.ml` | the whole search in one recursive function, and a drawn board |
+## First steps
 
-Roughly in order. The first three assume nothing; the last three assume the
-first six.
+- `01-values.ml` — values
+- `02-bindings.ml` — bindings and scope
+- `03-strings.ml` — strings and characters
+- `04-functions.ml` — functions
+- `05-choice.ml` — truth and choice
 
-## Things worth trying
+## Recursion
 
-Break something on purpose. The checker runs before anything else does:
+- `06-recursion.ml` — recursion
+- `07-patterns.ml` — patterns
+- `08-accumulators.ml` — accumulators
+- `09-mutual.ml` — two functions that need each other
+- `10-collatz.ml` — the Collatz sequence
 
-```
-- val n : int = "seven"
-ERR: string and int are not the same type
-```
+## Lists
 
-Ask what a function is, without running it:
+- `11-lists.ml` — lists
+- `12-higher-order.ml` — map, filter and fold
+- `13-sorting.ml` — sorting
+- `14-pairs.ml` — two lists at once
+- `15-run-length.ml` — run-length encoding
+- `16-primes.ml` — primes
 
-```
-- :t List.partition
-('a -> bool) -> 'a list -> 'a list * 'a list
-```
+## Types of your own
 
-Write a sort once and use it on three types, which is what let-polymorphism is
-for:
+- `17-datatypes.ml` — datatypes
+- `18-options.ml` — option, and no null
+- `19-trees.ml` — binary search trees
+- `20-expressions.ml` — an expression evaluator
+- `21-stack-machine.ml` — a stack machine
+- `22-records.ml` — records
 
-```
-- quicksort [3, 1, 2]
-- quicksort ["pear", "apple"]
-- quicksort (explode "sorting")
-```
+## Modules
 
-Leave a case out and see what you are told:
+- `23-structures.ml` — structures
+- `24-signatures.ml` — signatures, and hiding
+- `25-functors.ml` — functors
+- `26-dictionary.ml` — a dictionary over any key
 
-```
-- datatype colour = Red | Green | Blue
-- fun name Red = "red" | name Green = "green"
-  WARNING: this case does not cover Blue
-```
+## Programs
 
-## Two things that will trip you
+- `27-fizzbuzz.ml` — FizzBuzz, three ways
+- `28-eight-queens.ml` — eight queens
+- `29-life.ml` — Conway's Life
+- `30-turing.ml` — a Turing machine
 
-**Multi-line clausal definitions only work in a file.** The prompt reads one
-line at a time, so a `|` continuation on its own line is a syntax error there.
-Put the clauses on one line at the prompt, or write a file. Standard ML reads
-until the declaration is complete; this does not, yet.
+---
 
-**`~` is negation and `-` is subtraction.** `~3` is minus three; `3 - 10` is
-subtraction. They are different characters and Standard ML means it.
+`examples/index.json` is the same list in a form the web page reads.
+`test/examples.test.js` walks this README, that manifest and the directory
+against each other in both directions, so a file added without being listed
+goes red, and so does a listing with no file behind it.

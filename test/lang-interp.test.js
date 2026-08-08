@@ -1152,3 +1152,53 @@ test('an alias echoes as a structure, not as a string', () => {
   bml.run('structure Queue = struct val empty = nil end');
   assert.equal(bml.run('structure Q = Queue').text, 'structure Q : 1 name(s)');
 });
+
+// ---- three more holes of the same shape (v1.309) ----------------------------
+//
+// Writing thirty example programs found three declarations the EVALUATOR bound
+// and the CHECKER did not. Under strict — the command line's default — each one
+// declared its names and then refused every use of them. They are the same
+// shape as the `Decls` hole: a declaration form with no case in `remember`.
+
+test('a pattern binding tells the checker what it bound', () => {
+  // `val (a, b) = (1, 2)` bound both names in the evaluator and neither in the
+  // checker, which makes it the most visible of the three: a tuple binding is
+  // ordinary ML, and every use after one was refused.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('val (a, c) = (1, 2)');
+  assert.equal(bml.run('a + c').text, '3');
+  assert.equal(bml.typeReport('a'), 'int');
+  bml.run('val (p, (q, r)) = (1, (2, "x"))');
+  assert.equal(bml.run('q').text, '2');
+  assert.equal(bml.typeReport('r'), 'string', 'nested, and each with its own type');
+  bml.run('val {name = n, born = y} = {name = "ada", born = 1815}');
+  assert.equal(bml.run('n').text, '"ada"', 'and through a record');
+});
+
+test('local publishes the shown half and hides the rest', () => {
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('local fun helper n = n + 1 in fun total x = helper x end');
+  assert.equal(bml.run('total 1').text, '2');
+  assert.equal(bml.typeReport('total'), 'int -> int');
+  assert.equal(bml.run('helper 1').ok, false, 'the hidden half stays hidden');
+  bml.run('local val h = 1 in val sh = h + 1 end');
+  assert.equal(bml.run('sh').text, '2');
+});
+
+test('an and-chain is mutually recursive in the checker too', () => {
+  // Which is the reason to write one. The evaluator handled it; the checker
+  // read each body in an environment without its sibling, so `odd` was unbound
+  // while `even` was being typed.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('fun even 0 = true | even n = odd (n - 1) and odd 0 = false | odd n = even (n - 1)');
+  assert.equal(bml.run('even 4').text, 'true');
+  assert.equal(bml.run('odd 4').text, 'false');
+  assert.equal(bml.typeReport('even'), 'int -> bool');
+  // A `;` run is NOT a chain: those are separate declarations, each seeing only
+  // what came before it.
+  bml.run('val n1 = 1; val n2 = n1 + 1');
+  assert.equal(bml.run('n2').text, '2');
+});
