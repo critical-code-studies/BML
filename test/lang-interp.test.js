@@ -1626,3 +1626,26 @@ test('a datatype declared inside a structure publishes its constructors', () => 
   assert.equal(bml.typeReport('R'), 'colour');
   assert.equal(bml.typeReport('G'), 'int -> colour');
 });
+
+test('a qualified name whose structure is right is judged on its MEMBER', () => {
+  // `Date.January` when the month is `Date.Jan`. suggestName judges a qualified
+  // name on its HEAD, found Date perfectly good, and said nothing — so every
+  // near miss on a member got the bare message and no help at all.
+  const bml = createInterpreter({ typecheck: 'off', clock: () => 0 });
+  bml.loadPrelude();
+  const say = (s) => bml.run(s).text;
+
+  assert.match(say('Date.January'), /did you mean Date\.Jan\?/);
+  assert.match(say('Date.April'), /did you mean Date\.Apr\?/);
+  assert.match(say('Date.Monday'), /did you mean Date\.Mon\?/);
+  assert.match(say('Date.Friday'), /did you mean Date\.Fri\?/);
+  assert.match(say('Date.Friay'), /did you mean Date\.Fri\?/, 'a slip as well as a long form');
+  assert.match(say('List.mapp'), /did you mean List\.map\?/);
+  // Nothing like it in there: say that rather than guess.
+  assert.match(say('Date.zzz'), /Date has no zzz/);
+  // A wrong STRUCTURE is still judged on the structure.
+  assert.match(say('Lst.map'), /did you mean the structure List\?/);
+  // The ones that exist are untouched.
+  assert.equal(say('Date.May'), 'May');
+  assert.equal(say('Date.Wed'), 'Wed');
+});

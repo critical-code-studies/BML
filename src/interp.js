@@ -262,7 +262,7 @@ export function createInterpreter(opts = {}) {
   }
 
   /** The members of a structure, if that is what this name is. */
-  function membersOf(name) {
+  function membersOf(name, limit = 3) {
     const pre = `${name}.`;
     // FUNCTIONS first. Ordering by key put `Date.Jan, Date.Feb, Date.Mar` in
     // front — the month constructors, which are the least useful thing in
@@ -274,7 +274,7 @@ export function createInterpreter(opts = {}) {
       return t === 'closure' || t === 'builtin' || t === 'confn';
     };
     return [...all.filter(isFn), ...all.filter((k) => !isFn(k))]
-      .slice(0, 3)
+      .slice(0, limit)
       .map((k) => k.slice(pre.length));
   }
 
@@ -287,6 +287,25 @@ export function createInterpreter(opts = {}) {
     const own = membersOf(name);
     if (own.length) {
       return `ERR: ${name} is a structure, not a value — try ${own.map((k) => `${name}.${k}`).join(', ')}`;
+    }
+    // A QUALIFIED name whose STRUCTURE is right and member is not: `Date.January`
+    // when the month is `Date.Jan`. suggestName judges a qualified name on its
+    // head, finds Date perfectly good, and says nothing — so every near miss on
+    // a member got the bare message. The structure's own members are exactly the
+    // list to search.
+    const dot = String(name).indexOf('.');
+    if (dot > 0) {
+      const head = String(name).slice(0, dot);
+      const want = String(name).slice(dot + 1);
+      const all = membersOf(head, Infinity);
+      if (all.length && want.length >= 2) {
+        const low = want.toLowerCase();
+        const near = all.find((k) => k.toLowerCase() === low)
+          || all.find((k) => k.length >= 3
+            && (low.startsWith(k.toLowerCase()) || k.toLowerCase().startsWith(low)));
+        if (near) return `ERR: unbound variable: ${name} — did you mean ${head}.${near}?`;
+        return `ERR: unbound variable: ${name} — ${head} has no ${want}`;
+      }
     }
     const hint = suggestName(name, knownNames());
     // A name that is nowhere at the top level may still be INSIDE a structure.
