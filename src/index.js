@@ -1,4 +1,4 @@
-// BML — a little Standard ML. The public surface.
+// BML — a 2026 Standard ML. The public surface.
 //
 // This is the file a host imports. Everything reachable from here is the
 // language; nothing here knows about NostOS. When src/lang/ is split out to

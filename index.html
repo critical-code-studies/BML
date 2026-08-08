@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BML — a little Standard ML</title>
-<meta name="description" content="BML is a small implementation of Standard ML. The whole language runs in this page: type at the prompt and it answers.">
+<title>BML — a 2026 Standard ML</title>
+<meta name="description" content="BML is an experimental 2026 implementation of Standard ML. The whole language runs in this browser: type at the prompt and it answers.">
 
 <!-- The social preview. share.png is rendered from tools/share-card.html by
      tools/make-share-card.sh, so the card carries the site's own colours,
      font stack and banner art and the two cannot drift. The og:image URL is
      ABSOLUTE because scrapers do not resolve relative ones. -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="BML — a little Standard ML">
+<meta property="og:title" content="BML — a 2026 Standard ML">
 <meta property="og:description" content="Standard ML in the browser. Type at the prompt and it answers.">
 <meta property="og:url" content="https://critical-code-studies.github.io/BML/">
 <meta property="og:image" content="https://critical-code-studies.github.io/BML/share.png">
@@ -19,7 +19,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="A terminal showing BML: a datatype for trees is declared, a size function is defined over it, and the checker reports its type as 'a tree -> int.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="BML — a little Standard ML">
+<meta name="twitter:title" content="BML — a 2026 Standard ML">
 <meta name="twitter:description" content="Standard ML in the browser. Type at the prompt and it answers.">
 <meta name="twitter:image" content="https://critical-code-studies.github.io/BML/share.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230b0c0b'/><text y='25' x='3' font-family='monospace' font-size='22' fill='%233ce07a'>-</text></svg>">
@@ -311,9 +311,9 @@
 <body>
 <div class="screen">
 
-<h1>BML, a little Standard ML</h1>
+<h1>BML, a 2026 Standard ML</h1>
 
-<pre class="banner" id="banner" aria-label="BML, a little Standard ML"></pre>
+<pre class="banner" id="banner" aria-label="BML, a 2026 Standard ML"></pre>
 
 <nav>
   <button data-open="m-about">about</button>
@@ -379,23 +379,17 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
 <dialog id="m-about">
   <div class="m-head"><h2>about</h2><button data-close>esc</button></div>
   <div class="m-body">
-    <p>BML is a small implementation of Standard ML, the lexer, the parser, the
+    <p>BML is an experimental 2026 implementation of Standard ML, the lexer, the parser, the
     type inference, the standard library, all of it short enough that one person
     can hold it in mind and follow what happens to a program between the typing
     and the answer.</p>
 
-    <p>The compiler is opaque, the type error arrives from nowhere, and the
-    student learns to propitiate the machine rather than to understand it.
-    Iteracy, by which I mean the capacity to read and write computational
-    processes rather than merely operate them, depends on there being something
-    available to read, and an instrument whose parameters are visible is a
-    different sort of object from one whose parameters are hidden. A teaching
-    interpreter can be the first sort, and this one tries to be. The standard
+    <p>The standard
     library is written in BML itself and loaded as source, so the
     <code>map</code> you call is the <code>map</code> you could have written, and
     you can open the file and confirm that it is.</p>
 
-    <p>The whole language is running in this page. There is no server behind the
+    <p>The whole language is running in this browser. There is no server behind the
     prompt, nothing is sent anywhere, and the files answering here are the files
     in the repository.</p>
   </div>
@@ -478,29 +472,20 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
          number goes back on, it needs a test that reads this file and checks it
          against what the harnesses report. -->
     <p>BML is being developed to capture all of SML functionality. The core
-    language, the module system and the type system are complete; Harper's
-    course examples run as written. Three things are left, and two of them are
-    on purpose:</p>
+    language, the module system and the type system are complete:</p>
     <table class="figures">
-      <tr><td>the stack</td><td><b>The one real divergence.</b> Non-tail
+      <tr><td>the stack</td><td>Non-tail
           recursion is bounded by the host's stack. Measured, a first run
           reaches a depth of about <b>1,200</b>, and about 4,200 once the
           browser has compiled the evaluator, so a recursion deeper than that
-          stops rather than finishing. Tail calls are proper, as the Definition
-          requires, and are bounded by nothing.</td></tr>
-      <tr><td>no <code>OS</code></td><td>On purpose, and it will not change:
-          nothing behind this has a file system, and a structure that answered
-          would be lying about the machine it is on.</td></tr>
-      <tr><td><code>Date</code> is UTC</td><td>Which follows from the line above.
-          Local time needs a timezone and there is no operating system here to
-          hold one, so <code>fromTimeLocal</code> is <code>fromTimeUniv</code>
-          and says so rather than guessing.</td></tr>
+          stops rather than finishing. Tail calls are not bounded.</td></tr>
+      <tr><td>no <code>OS</code></td><td>Runs in the browser, so no OS support
+          as such.</td></tr>
+      <tr><td><code>Date</code> is UTC</td><td><code>fromTimeLocal</code> and
+          <code>fromTimeUniv</code> are not able to give the OS time.</td></tr>
     </table>
-    <p>The Basis is twenty-nine structures and 430 members. Everything else that
-    was on this list — the literals, exception and datatype replication, row
-    polymorphism, an operator named where it is used, a <code>let</code> either
-    side of an operator, <code>open</code> inside one, a functor over several
-    structures — is in.</p>
+    <p>The Basis Library is Standard ML's standard library, specified separately
+    from the language in 1997.</p>
   </div>
 </dialog>
 
@@ -616,7 +601,7 @@ const phos     = document.getElementById('phos');
     '╚═════╝ ╚═╝     ╚═╝╚══════╝',
   ];
   const VERSION_ROW = 3;
-  const SIDE = ['', '', 'a little Standard ML', `version ${BML_VERSION}`, '', ''];
+  const SIDE = ['', '', 'a 2026 Standard ML', `version ${BML_VERSION}`, '', ''];
   const artW  = Math.max(...ART.map((a) => a.length));
   const sideW = Math.max(...SIDE.map((t) => t.length));
   const inner = 2 + artW + 3 + sideW + 1;
@@ -683,7 +668,7 @@ function makeSession(announce) {
   });
   bml.loadPrelude();
   if (announce) {
-    write(`${BML_NAME} ${BML_VERSION}, a little Standard ML`, 'sys');
+    write(`${BML_NAME} ${BML_VERSION}, a 2026 Standard ML`, 'sys');
     write('Created by David M. Berry, University of Sussex, 2026.', 'p');
     write('Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.', 'p');
     write('');

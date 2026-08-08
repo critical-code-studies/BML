@@ -8,25 +8,19 @@ With thanks to Robert Harper for the inspiration in his *Introduction to
 Standard ML* (1986), and to Åke Wikström for *Functional Programming Using
 Standard ML* (1987).
 
-A little Standard ML, in plain JavaScript. No build step and no dependencies.
+A 2026 Standard ML, in plain JavaScript. No build step and no dependencies.
 
 **[Try it in the browser →](https://critical-code-studies.github.io/BML/)** The
-whole language runs in the page: the same files, no server behind the prompt.
+whole language runs in the browser: the same files, no server behind the prompt.
 
-BML is a small implementation of Standard ML, the lexer, the parser, the type
-inference, the standard library, all of it short enough that one person can hold
-it in mind and follow what happens to a program between the typing and the
-answer.
+BML is an experimental 2026 implementation of Standard ML, the lexer, the
+parser, the type inference, the standard library, all of it short enough that
+one person can hold it in mind and follow what happens to a program between the
+typing and the answer.
 
-The compiler is opaque, the type error arrives from nowhere, and the student
-learns to propitiate the machine rather than to understand it. Iteracy, by which
-I mean the capacity to read and write computational processes rather than merely
-operate them, depends on there being something available to read, and an
-instrument whose parameters are visible is a different sort of object from one
-whose parameters are hidden. A teaching interpreter can be the first sort, and
-this one tries to be. The standard library is written in BML itself and loaded as
-source, so the `map` you call is the `map` you could have written, and you can
-open the file and confirm that it is.
+The standard library is written in BML itself and loaded as source, so the `map`
+you call is the `map` you could have written, and you can open the file and
+confirm that it is.
 
 Types are inferred rather than declared, a program that does not typecheck does
 not run, and the tradition running from Milner's LCF is one of machine-checked
@@ -36,7 +30,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.36.0, a little Standard ML
+BML 0.36.0, a 2026 Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -72,13 +66,13 @@ continuation-passing program runs to whatever depth the step budget allows
 rather than to whatever the host stack has left.
 
 Types are inferred by Hindley-Milner with the occurs check, let-polymorphism and
-the value restriction, with exhaustiveness warnings on `case`. The Basis subset
-is written in BML itself and loaded as source, so you can open `src/basis.js` and
-read the same `map` you would have written.
+the value restriction, with exhaustiveness warnings on `case`. The Basis Library
+subset is written in BML itself and loaded as source, so you can open
+`src/basis.js` and read the same `map` you would have written.
 
 It is measured rather than described, two ways. Against the 32 example files
 from Robert Harper's *Introduction to Standard ML* course, this build runs
-**350 of 408 top-level declarations (86%)** as written, with no translation:
+**355 of 408 top-level declarations (87%)** as written, with no translation:
 
 ```
 node tools/isml-conformance.mjs
@@ -96,13 +90,13 @@ list written here; the checklist catches what the corpus happens not to use.
 Harper's files contain no `while` and no arrays, so the corpus had nothing to
 say about either while both were missing.
 
-The harness reports what the rest ARE, which took some working out. Of the 59
-that do not run, 6 raise as Standard ML would, 13 are refused by the type
+The harness reports what the rest ARE, which took some working out. Of the 53
+that do not run, 7 raise as Standard ML would, 13 are refused by the type
 checker and some of those refusals are correct (Harper prints deliberate
 errors: `typval.sml` line 8 is four ill-typed expressions in a row, put there
-to show a student what one looks like), 10 fail on a name an earlier failure
-would have bound, and 12 name something the file never defines at all. That
-leaves **18 this build genuinely cannot read**, and two of those are a LaTeX
+to show a student what one looks like), 11 fail on a name an earlier failure
+would have bound, and 14 name something the file never defines at all. That
+leaves **8 this build genuinely cannot read**, and two of those are a LaTeX
 escape left in Harper's source.
 
 So 100% is not reachable, and the ceiling is not a fact about this build. Parts
@@ -194,7 +188,7 @@ with it for the record even though the file itself is gone.
 
 ## What it is not
 
-Not SML '97. The full Basis of 47 structures, sharing constraints and functor
+Not SML '97. The full Basis Library of 47 structures, sharing constraints and functor
 signatures are years of work no teaching implementation attempts.
 
 The gaps are catalogued rather than described, in a register that a test walks
@@ -202,10 +196,10 @@ so that fixing one turns the test red and names the entry to delete. The
 register is currently empty. About 13% of Harper's corpus does not run as
 written, and some of that cannot: parts of it were never valid Standard ML.
 
-The Basis is 29 structures of roughly 47, and 430 members. There is no `OS`,
-and there is not going to be one: nothing sits behind this that has a file
-system or processes. `Date` is therefore UTC only, since local time needs a
-timezone and there is no operating system here to hold one.
+The Basis Library is 29 structures of roughly 47, and 430 members. There is no `OS`:
+this runs in the browser, so there is no OS support as such. `Date` is
+therefore UTC only, and `fromTimeLocal` and `fromTimeUniv` are not able to
+give the OS time.
 
 `Word` arithmetic does not wrap: `0wxFFFFFFFF + 0w1` answers `0w100000000`
 where a 32-bit word gives `0w0`. The bitwise operators do mask correctly, so
