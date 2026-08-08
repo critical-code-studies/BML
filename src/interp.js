@@ -289,6 +289,20 @@ export function createInterpreter(opts = {}) {
       return `ERR: ${name} is a structure, not a value — try ${own.map((k) => `${name}.${k}`).join(', ')}`;
     }
     const hint = suggestName(name, knownNames());
+    // A name that is nowhere at the top level may still be INSIDE a structure.
+    // `February` is not a binding and never will be, but `Date.Feb` is, and a
+    // reader reaching for a month wants pointing at it rather than told again
+    // that the word they wrote means nothing.
+    if (!hint && String(name).length >= 4) {
+      const low = String(name).toLowerCase();
+      const inside = Object.keys(session).find((k) => {
+        const dot = k.indexOf('.');
+        if (dot <= 0) return false;
+        const member = k.slice(dot + 1).toLowerCase();
+        return member.length >= 3 && (low.startsWith(member) || member.startsWith(low));
+      });
+      if (inside) return `ERR: unbound variable: ${name} — there is ${inside}`;
+    }
     if (!hint) return `ERR: unbound variable: ${name}`;
     // If the suggestion IS a structure, carry the same advice through, so the
     // reader is not sent from one unbound name to another.

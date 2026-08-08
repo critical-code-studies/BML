@@ -104,7 +104,13 @@ export function suggestName(name, known = []) {
   const cased = known.find((k) => k !== name && k.toLowerCase() === lower);
   if (cased) return `did you mean ${cased}? Standard ML tells capitals apart`;
 
-  const near = known.find((k) => k !== name && withinOneEdit(String(k), String(name)));
+  // ONE EDIT MEANS NOTHING ON A SHORT NAME. Every one-character name is one
+  // edit from every other, so `e handle Bad => 0` was answered with "did you
+  // mean o?" — confident, and no help at all. Three characters is where an edit
+  // is a small enough part of the word to be a slip rather than a coincidence.
+  if (String(name).length < 3) return null;
+  const near = known.find((k) => k !== name
+    && String(k).length >= 3 && withinOneEdit(String(k), String(name)));
   if (near) return `did you mean ${near}?`;
   return null;
 }

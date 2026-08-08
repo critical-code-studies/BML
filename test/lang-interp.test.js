@@ -1566,3 +1566,26 @@ test('an unfinished binding says what is missing, not which token', () => {
   assert.equal(bml.run('val d2 : int = 0').ok, true);
   assert.equal(bml.run('fun f2 x = x').ok, true);
 });
+
+test('a short name gets no guess, and a member inside a structure gets pointed at', () => {
+  const bml = createInterpreter({ typecheck: 'off', clock: () => 0 });
+  bml.loadPrelude();
+  const say = (s) => bml.run(s).text;
+
+  // ONE EDIT MEANS NOTHING ON A SHORT NAME. Every one-character name is one
+  // edit from every other, so `e handle Bad => 0` was answered "did you mean
+  // o?" — confident, and no help at all.
+  assert.equal(say('e handle Bad => 0'), 'ERR: unbound variable: e');
+  assert.equal(say('e'), 'ERR: unbound variable: e');
+  assert.equal(say('ab'), 'ERR: unbound variable: ab');
+  // Three characters is where an edit is a small enough part of the word to be
+  // a slip rather than a coincidence.
+  assert.match(say('Tim'), /Time/);
+  assert.match(say('prnt'), /did you mean print\?/);
+
+  // A name that is nowhere at the top level may still be inside a structure.
+  assert.match(say('February'), /there is Date\.Feb/);
+  assert.match(say('tabulate'), /there is List\.tabulate/);
+  // And a name that is neither gets nothing rather than a guess.
+  assert.equal(say('zqxjw'), 'ERR: unbound variable: zqxjw');
+});
