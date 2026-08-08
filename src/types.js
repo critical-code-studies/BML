@@ -777,6 +777,10 @@ export function infer(node, env, cons) {
 
     case 'Datatype': return UNIT;
 
+    // The open's own names come from the session, which infer already reads, so
+    // the body is typed as it stands.
+    case 'LetOpen': { infer(node.decl, env, cons); return infer(node.body, env, cons); }
+
     // A STRUCTURE. Until v1.293 this fell through to `fresh()` below, so
     // `structure List = struct … end` was never walked and no member ever got a
     // type. `List.map` then looked up `list.map`, missed, and took the same

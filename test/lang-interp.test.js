@@ -1287,11 +1287,10 @@ test('`let … end` can be the operand of an operator', () => {
   const bml = createInterpreter({ typecheck: 'strict' });
   bml.loadPrelude();
   assert.equal(bml.run('let val m = 3 in m end * 2').text, '6');
-  // The RIGHT operand is a separate gap and this does not close it: the right
-  // side is read by the operator grammar, which has no `let` in it. Both corpus
-  // declarations put the `let` on the left.
-  assert.equal(bml.run('let val m = 3 in m end + let val n = 4 in n end').ok, false,
-    'a `let` on the right is still refused');
+  // The RIGHT operand was a separate gap and was asserted here as refused until
+  // v1.322 closed it. Both sides now.
+  assert.equal(bml.run('let val m = 3 in m end + let val n = 4 in n end').text, '7',
+    'and one on each side');
   bml.run('fun h (x:real):real = let val y = 2.0 in y+y end * x');
   assert.equal(bml.run('h 3.0').text, '12.0', 'and inside a fun body');
 
@@ -1695,4 +1694,134 @@ test('records unify BY LABEL, not by position', () => {
   bml.run('fun pair x = {a = x, b = x}');
   assert.equal(bml.typeReport('pair 1'), '{a : int, b : int}');
   assert.equal(bml.typeReport('pair "s"'), '{a : string, b : string}');
+});
+
+// ---- the eight language gaps, one test each (docs/language-gaps-plan.md) ----
+
+test('G1: control and unicode string escapes', () => {
+  // `\^A` is the control character whose code is the letter's minus 64; `\uXXXX`
+  // is four hex digits. Both are in the Definition and neither lexed.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.run('size "\\^A"').text, '1');
+  assert.equal(bml.run('ord (String.sub ("\\^A", 0))').text, '1');
+  assert.equal(bml.run('ord (String.sub ("\\^[", 0))').text, '27');
+  assert.equal(bml.run('"\\u0041"').text, '"A"');
+  assert.equal(bml.run('"\\u00e9"').text, '"é"');
+  assert.equal(bml.run('"\\^"').ok, false, 'and a malformed one is refused');
+  assert.equal(bml.run('"\\u12"').ok, false);
+  // The escapes that already worked are untouched.
+  assert.equal(bml.run('size "a\\nb"').text, '3');
+  assert.equal(bml.run('"\\065"').text, '"A"');
+});
+
+test('G2: numeric record labels', () => {
+  // In Standard ML a tuple IS a record with numeric labels. The labels were read
+  // as identifiers only, so the numeric spelling was a parse error.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('#1 {1 = 9, 2 = 8}').text, '9');
+  assert.equal(bml.run('#2 {1 = 9, 2 = 8}').text, '8');
+  assert.equal(bml.run('case {1 = 4, 2 = 5} of {1 = a, 2 = b} => a + b').text, '9');
+  assert.equal(bml.run('{a = 1}').text, '{a = 1}', 'and a named label still reads');
+  assert.equal(bml.run('#1 (4, 5)').text, '4');
+});
+
+test('G3: datatype replication shares the constructors', () => {
+  // `datatype t = datatype u` is another name for one type, not a copy of it,
+  // so a value made with u's constructor matches a pattern written against t.
+  // That is the half the exception replication got wrong at first.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  bml.run('datatype hue = Red | Blue of int');
+  assert.equal(bml.run('datatype shade = datatype hue').ok, true);
+  assert.equal(bml.run('case Red of Red => "red" | Blue _ => "blue"').text, '"red"');
+  assert.equal(bml.run('case Blue 2 of Red => 0 | Blue n => n').text, '2');
+  assert.equal(bml.run('datatype nope = datatype zzz').ok, false, 'and only a datatype can be');
+});
+
+test('G4: open inside a let, and it stops at the end', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('let open List in null [] end').text, 'true');
+  bml.run('structure Q9 = struct val z9 = 41 end');
+  assert.equal(bml.run('let open Q9 in z9 + 1 end').text, '42');
+  // SCOPED. `open` binds into the environment rather than the session, so a
+  // child scope gives it exactly the reach the Definition says: the body.
+  assert.equal(bml.run('z9').ok, false, 'and no further than the end');
+  // A plain top-level open is unaffected.
+  bml.run('open Q9');
+  assert.equal(bml.run('z9').text, '41');
+});
+
+test('G5: a let, if, case or fn may be an operator’s right operand', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('1 + let val m = 2 in m end').text, '3');
+  assert.equal(bml.run('let val a = 1 in a end + let val b = 2 in b end').text, '3');
+  assert.equal(bml.run('1 + if true then 2 else 3').text, '3');
+  assert.equal(bml.run('1 + case 0 of 0 => 5 | _ => 6').text, '6');
+
+  // The `;` work at v1.307 and the left-operand work at v1.312 are what this
+  // could have broken, so each of their shapes is asserted rather than assumed.
+  assert.equal(bml.run('let val x = 1 in x; x + 1 end').text, '2');
+  assert.equal(bml.run('(1; 2; 3)').text, '3');
+  assert.equal(bml.run('(if true then 1 else 2; 7)').text, '7');
+  assert.equal(bml.run('let val a = 2 in let val b = 3 in a * b end end').text, '6');
+  assert.equal(bml.run('let val m = 3 in m end * 2').text, '6');
+  assert.equal(bml.run('2 * 3 + 1').text, '7', 'precedence is unchanged');
+  assert.equal(bml.run('1 :: 2 :: nil').text, '[1, 2]', 'and so is associativity');
+});
+
+test('G6: a functor may take several structures', () => {
+  // `functor F (structure P : S structure Q : S)` is Standard ML's sugar for a
+  // functor over one anonymous structure with P and Q inside it, and the
+  // application supplies one structure per name.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('signature Q1 = sig val v : int end');
+  assert.equal(bml.run('functor F2 (structure P : Q1 structure Q : Q1) = struct val w = P.v + Q.v end').ok, true);
+  bml.run('structure A1 = struct val v = 10 end');
+  bml.run('structure B1 = struct val v = 32 end');
+  bml.run('structure R2 = F2 (structure P = A1 structure Q = B1)');
+  assert.equal(bml.run('R2.w').text, '42');
+
+  // An anonymous structure per binding, which is what examples/25-functors.ml
+  // writes and what the first spelling of this refused.
+  bml.run('structure R6 = F2 (structure P = struct val v = 1 end structure Q = struct val v = 2 end)');
+  assert.equal(bml.run('R6.w').text, '3');
+
+  // All three single-parameter forms are untouched.
+  bml.run('functor F1 (X : Q1) = struct val m = X.v end');
+  bml.run('structure R3 = F1 (A1)');
+  assert.equal(bml.run('R3.m').text, '10', 'by name');
+  bml.run('structure R4 = F1 (structure X = A1)');
+  assert.equal(bml.run('R4.m').text, '10', 'by specification');
+  bml.run('structure R5 = F1 (struct val v = 7 end)');
+  assert.equal(bml.run('R5.m').text, '7', 'anonymous');
+});
+
+test('G7/G8: an operator can be named where it will be used', () => {
+  // `fun (f ** g) (x, y) = …` defines `**`, not a function called f, and
+  // `fun (op ++) (a, b) = …` names the operator plainly. Standard ML reads the
+  // left-hand side as a pattern and takes the operator out of it.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+
+  bml.run('fun (f ** g) (x, y) = (f x, g y)');
+  bml.run('infix 7 **');
+  assert.equal(bml.run('((fn a => a + 1) ** (fn b => b * 2)) (3, 4)').text, '(4, 8)');
+
+  bml.run('fun (op ++) (a, b) = a + b');
+  bml.run('infix 6 ++');
+  assert.equal(bml.run('3 ++ 4').text, '7');
+
+  // Nothing that was already a binding changes: the shapes below all begin with
+  // a `(` too, and are read as they were.
+  bml.run('fun idp (x) = x');
+  assert.equal(bml.run('idp 9').text, '9');
+  bml.run('fun swp (a, b) = (b, a)');
+  assert.equal(bml.run('swp (1, 2)').text, '(2, 1)');
+  bml.run('val (va, vb) = (1, 2)');
+  assert.equal(bml.run('va').text, '1', 'a val still takes a pattern there');
 });

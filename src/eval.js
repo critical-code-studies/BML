@@ -434,7 +434,42 @@ export function evalNode(node, env, ctx, builtins) {
       const inner = Object.create(env);
       // The argument's names are visible inside the body both bare and under
       // the parameter's name, so `X.size` and `size` both find it.
-      if (node.argDecls) {
+      //
+      // SEVERAL STRUCTURES, one per parameter:
+      // `F (structure P = A structure Q = B)`. Each is copied in under its own
+      // parameter's name and bare, which is what the single-parameter path does
+      // once, done once per binding.
+      if (node.argBinds) {
+        for (const b of node.argBinds) {
+          // An anonymous structure for this parameter: run its declarations
+          // into a scratch scope and take those, as the single-parameter path
+          // does for `F (struct … end)`.
+          if (b.decls) {
+            const anon = Object.create(env);
+            for (const d of b.decls) evalNode(d, anon, { ...ctx, session: anon }, builtins);
+            for (const k of Object.keys(anon)) {
+              if (k.startsWith('__') || k.includes('.')) continue;
+              inner[`${nameKey(b.param)}.${k}`] = anon[k];
+              if (!(k in inner)) inner[k] = anon[k];
+            }
+            continue;
+          }
+          const pre = `${nameKey(b.from)}.`;
+          let found = 0;
+          for (let e = store; e && e !== Object.prototype; e = Object.getPrototypeOf(e)) {
+            for (const k of Object.keys(e)) {
+              if (!k.startsWith(pre)) continue;
+              const bare = k.slice(pre.length);
+              if (bare.includes('.')) continue;
+              inner[`${nameKey(b.param)}.${bare}`] = e[k];
+              if (!(bare in inner)) inner[bare] = e[k];
+              found++;
+            }
+          }
+          if (!found) throw new RonmlError(`${b.from} is not a structure`);
+        }
+      }
+      else if (node.argDecls) {
         // `F (struct val z = 5 end)` — an ANONYMOUS structure. Run its
         // declarations into a scratch scope and hand those over, rather than
         // reading a named structure out of the session.
@@ -545,6 +580,14 @@ export function evalNode(node, env, ctx, builtins) {
       }
     }
 
+    // `let open S in e end`. A child scope, so what the open brings reaches the
+    // body and stops at the `end`, which is what Standard ML says.
+    case 'LetOpen': {
+      const inner = Object.create(env);
+      evalNode(node.decl, inner, ctx, builtins);
+      return evalNode(node.body, inner, ctx, builtins);
+    }
+
     case 'OpenDecl': {
       const store = (ctx && ctx.session) || {};
       const opened = [];
@@ -629,6 +672,19 @@ export function evalNode(node, env, ctx, builtins) {
     case 'Datatype': {
       const store = (ctx && ctx.session) || {};
       const reg = (store.__cons = store.__cons || {});
+      // `datatype t = datatype u` shares u's CONSTRUCTORS. Every one of them is
+      // registered again under this type's name, keeping its own identity, so a
+      // value made with u's constructor matches a pattern written against t —
+      // which is the whole point, and the half that the exception replication
+      // got wrong on the first attempt.
+      if (node.alias) {
+        const src = store.__datacons && store.__datacons[node.alias];
+        const names = src || [];
+        if (!names.length) throw new RonmlError(`${node.alias} is not a datatype`);
+        (store.__datacons = store.__datacons || {})[node.name] = names.slice();
+        return { tag: 'datatype', name: node.name, cons: names.slice() };
+      }
+      (store.__datacons = store.__datacons || {})[node.name] = node.cons.map((c) => c.name);
       for (const c of node.cons) {
         reg[c.name] = { name: c.name, arity: c.arity, of: node.name };
         store[nameKey(c.name)] = c.arity === 0

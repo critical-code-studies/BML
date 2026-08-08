@@ -297,6 +297,45 @@ export function parse(toks, fixityIn) {
     return !!toks[q] && toks[q].t === 'EQ';
   }
 
+  // A binding whose name is written in the position it will be USED in:
+  //
+  //   fun (f ** g) (x, y) = (f x, g y)     defines **, taking the pair (f, g)
+  //   fun (op +) (a, b) = a                defines +, `op` naming it plainly
+  //
+  // Standard ML reads the left-hand side as a pattern and takes the operator
+  // out of it. Returns the name and the parameters that were around it, or null
+  // if this is not one of those shapes — in which case nothing is consumed.
+  function infixLhs() {
+    if (peek().t !== 'LP') return null;
+    const save = p;
+    p++;
+    // `(op +)`, and `op` on any operator this lexer gives a token of its own.
+    if (peek().t === 'IDENT' && nameKey(peek().v) === 'op') {
+      p++;
+      const t = toks[p++];
+      const sym = OP_SYM[t.t] || (t.t === 'STAR' ? '*' : null) || (t.t === 'IDENT' ? t.v : null);
+      if (sym && peek().t === 'RP') { p++; return { name: sym, params: [] }; }
+      p = save; return null;
+    }
+    // `(f ** g)` — a name either side of an operator.
+    if (peek().t === 'IDENT') {
+      const left = toks[p++].v;
+      const t = toks[p++];
+      const sym = OP_SYM[t.t] || (t.t === 'STAR' ? '*' : null)
+        || (t.t === 'IDENT' && !/^[A-Za-z_]/.test(t.v) ? t.v : null);
+      if (sym && peek().t === 'IDENT') {
+        const right = toks[p++].v;
+        if (peek().t === 'RP') {
+          p++;
+          return { name: sym, params: [{ pat: { p: 'tuple', items: [
+            { p: 'name', name: left, args: [] }, { p: 'name', name: right, args: [] },
+          ] } }] };
+        }
+      }
+    }
+    p = save; return null;
+  }
+
   function letParams() {
     const params = [];
     for (;;) {
@@ -384,6 +423,19 @@ export function parse(toks, fixityIn) {
     if (isKeyword(peek(), 'if')) return parseIf();
     if (isKeyword(peek(), 'while')) return parseWhile();
     if (isKeyword(peek(), 'let')) {
+      // `let open List in null [] end`. A `let` may hold a DECLARATION, not only
+      // a binding, and `open` is the one anybody writes there. It binds into the
+      // ENVIRONMENT rather than the session, so a child scope gives it exactly
+      // the reach Standard ML says it has: the body, and no further.
+      if (toks[p + 1] && isKeyword(toks[p + 1], 'open')) {
+        p++;
+        const decl = parseTopOne();
+        if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after the open");
+        p++;
+        const body = inSeq(parseExpr);
+        if (isKeyword(peek(), 'end')) p++;
+        return asOperand({ type: 'LetOpen', decl, body });
+      }
       // WHICH WORD it was matters and this used to throw it away. In Standard
       // ML `val` takes a PATTERN and `fun` takes a name and its parameters;
       // `val f x = e` is not a thing. Losing the distinction meant
@@ -418,7 +470,12 @@ export function parse(toks, fixityIn) {
         const nxt = toks[p + 1];
         return !!nxt && nxt.t !== 'EQ' && nxt.t !== 'COLON';
       };
-      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern()) {
+      // `fun (f ** g) (x, y) = …` and `fun (op +) (a, b) = …`. Tried before the
+      // pattern branch below, which sees the `(` and reads the whole left-hand
+      // side as something to bind. Never for `val`, which really does take a
+      // pattern there.
+      const infLhs = saidVal ? null : infixLhs();
+      if (!infLhs && (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern())) {
         const pat = valTakesPattern() ? parsePattern() : parsePatternAtom();
         eat('EQ');
         const value = parseExpr();
@@ -437,8 +494,10 @@ export function parse(toks, fixityIn) {
         }
         return { type: 'TopLetPat', pat, value };
       }
-      const nameTok = eat('IDENT');
-      const params = letParams();
+      // `fun (f ** g) (x, y) = …` and `fun (op +) (a, b) = …` name the function
+      // where it will be used. Nothing is consumed when it is neither.
+      const nameTok = infLhs ? { t: 'IDENT', v: infLhs.name } : eat('IDENT');
+      const params = infLhs ? [...infLhs.params, ...letParams()] : letParams();
       let ann0 = null;
       if (peek().t === 'COLON') { p++; ann0 = parseTypeExpr(); }
       eat('EQ');
@@ -579,7 +638,7 @@ export function parse(toks, fixityIn) {
       if (peek().t !== 'RC') {
         for (;;) {
           if (peek().t === 'ELLIPSIS') { p++; open = true; break; }
-          const label = eat('IDENT').v;
+          const label = peek().t === 'NUM' ? String(eat('NUM').v) : eat('IDENT').v;
           // `{x = x : real}`. A field takes a pattern WITH its annotation, the
           // same as any other pattern position; `parsePattern` alone stops at
           // the colon and the caller then wants the `}`.
@@ -766,10 +825,24 @@ export function parse(toks, fixityIn) {
       // Left-associative operators demand a tighter right operand; right-
       // associative ones accept their own level, which is what makes
       // `1 :: 2 :: nil` group to the right.
-      const right = parseInfix(f[1] === 'l' ? f[0] + 1 : f[0]);
+      // A `let`, `if`, `case` or `fn` on the RIGHT of an operator is read by
+      // parseExpr1, above this level, so `1 + let val m = 2 in m end` stopped
+      // at the `let`. The left operand has worked since v1.312; this is the
+      // other half. Standard ML reads such an operand as far as it goes, which
+      // is what parseExpr1 does, so there is nothing to bound it with here.
+      const right = startsBigExpr(peek())
+        ? parseExpr1()
+        : parseInfix(f[1] === 'l' ? f[0] + 1 : f[0]);
       left = mkInfix(sym, left, right);
     }
     return left;
+  }
+
+  // The forms parseExpr1 reads whole, which the operator grammar has no room
+  // for. As an operand they are read by that parser and run to their own end.
+  function startsBigExpr(tok) {
+    return isKeyword(tok, 'let') || isKeyword(tok, 'if')
+      || isKeyword(tok, 'case') || isKeyword(tok, 'fn') || isKeyword(tok, 'raise');
   }
 
   function parseCompare() { return parseInfix(0); }
@@ -855,7 +928,7 @@ export function parse(toks, fixityIn) {
       const fields = [];
       if (peek().t !== 'RC') {
         for (;;) {
-          const label = eat('IDENT').v;
+          const label = peek().t === 'NUM' ? String(eat('NUM').v) : eat('IDENT').v;
           if (peek().t === 'EQ') { p++; fields.push({ label, value: parseExpr() }); }
           else fields.push({ label, value: { type: 'Var', name: label } });
           if (peek().t !== 'COMMA') break;
@@ -1197,8 +1270,14 @@ export function parse(toks, fixityIn) {
       // body. That is already how a functor is applied here — the argument's
       // names are bound both bare and under the parameter's name — so the
       // sugar only has to reach the same place: take K as the parameter.
+      // SEVERAL structure parameters: `functor F (structure P : S structure Q : S)`.
+      // Standard ML's sugar for a functor over one anonymous structure with P
+      // and Q inside it, so each name is a parameter and the application
+      // supplies one structure per name.
+      const params = [];
       if (isKeyword(peek(), 'structure')) p++;
       const param = eat('IDENT').v;
+      params.push(param);
       // D-16: the parameter's signature may be written OUT rather than named:
       // `functor G (X : sig val n : int end)`. A named one already worked, so
       // this only had to accept the other spelling and skip to the matching
@@ -1219,6 +1298,12 @@ export function parse(toks, fixityIn) {
           eat('IDENT');
         }
       }
+      // …and any more of them, each with its own optional signature.
+      while (isKeyword(peek(), 'structure')) {
+        p++;
+        params.push(eat('IDENT').v);
+        if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); skipWhereClauses(); }
+      }
       eat('RP');
       if (peek().t === 'COLON' || peek().t === 'ASCRIBE') { p++; eat('IDENT'); skipWhereClauses(); }
       eat('EQ');
@@ -1229,7 +1314,7 @@ export function parse(toks, fixityIn) {
       while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { decls.push(parseTop()); }
       inBlock--;
       if (isKeyword(peek(), 'end')) p++;
-      return { type: 'FunctorDecl', name: nameTok.v, param, decls };
+      return { type: 'FunctorDecl', name: nameTok.v, param, params, decls };
     }
     // `open S` brings a structure's names into scope unqualified. It takes
     // several at once and later ones win, which is what SML says.
@@ -1294,8 +1379,41 @@ export function parse(toks, fixityIn) {
           p++;
           // …and the matching sugar at the application: `F (structure K = X)`
           // names the argument by declaration rather than passing a structure.
-          // The name on the right is the structure being handed over.
-          if (isKeyword(peek(), 'structure')) { p++; eat('IDENT'); eat('EQ'); }
+          // The name on the right is the structure being handed over. SEVERAL of
+          // them is the matching half of a multi-parameter functor:
+          // `F (structure P = A structure Q = B)`, one structure per name.
+          if (isKeyword(peek(), 'structure')) {
+            const binds = [];
+            while (isKeyword(peek(), 'structure')) {
+              p++;
+              const pname = eat('IDENT').v;
+              eat('EQ');
+              // The right-hand side is a NAME or an anonymous `struct … end`.
+              // The example in examples/25-functors.ml writes the second, which
+              // the first spelling of this refused.
+              if (isKeyword(peek(), 'struct')) {
+                p++;
+                const ds = [];
+                inBlock++;
+                while (eatDeclSemis(), !isKeyword(peek(), 'end') && peek().t !== 'EOF') { ds.push(parseTop()); }
+                inBlock--;
+                if (isKeyword(peek(), 'end')) p++;
+                binds.push({ param: pname, decls: ds });
+              } else {
+                binds.push({ param: pname, from: eat('IDENT').v });
+              }
+            }
+            eat('RP');
+            // ONE of them, given by name, is the form that already worked: hand
+            // the structure over and let the single-parameter path take it.
+            if (binds.length === 1 && binds[0].from) {
+              return { type: 'StructApply', name: nameTok.v, functor: fn, arg: binds[0].from, ascribe };
+            }
+            if (binds.length === 1 && binds[0].decls) {
+              return { type: 'StructApply', name: nameTok.v, functor: fn, arg: null, argDecls: binds[0].decls, ascribe };
+            }
+            return { type: 'StructApply', name: nameTok.v, functor: fn, arg: null, argBinds: binds, ascribe };
+          }
           // `F (struct val z = 5 end)` — an ANONYMOUS structure as the
           // argument, which Standard ML allows and which was a parse error
           // here: the argument had to be a name declared on an earlier line.
@@ -1347,6 +1465,13 @@ export function parse(toks, fixityIn) {
       }
       const nameTok = eat('IDENT');
       eat('EQ');
+      // `datatype t = datatype u` — a REPLICATION. Not a new type but another
+      // name for one, sharing its constructors, so `t` and `u` are one type
+      // under two names. The same shape as `exception E = Fail`.
+      if (isKeyword(peek(), 'datatype')) {
+        p++;
+        return { type: 'Datatype', name: nameTok.v, params: [], cons: [], alias: eat('IDENT').v };
+      }
       const cons = [];
       for (;;) {
         const c = eat('IDENT');
@@ -1377,6 +1502,19 @@ export function parse(toks, fixityIn) {
       return { type: 'Datatype', name: nameTok.v, params, cons };
     }
     if (isKeyword(peek(), 'let')) {
+      // `let open List in null [] end`. A `let` may hold a DECLARATION, not only
+      // a binding, and `open` is the one anybody writes there. It binds into the
+      // ENVIRONMENT rather than the session, so a child scope gives it exactly
+      // the reach Standard ML says it has: the body, and no further.
+      if (toks[p + 1] && isKeyword(toks[p + 1], 'open')) {
+        p++;
+        const decl = parseTopOne();
+        if (!isKeyword(peek(), 'in')) throw new RonmlError("expected 'in' after the open");
+        p++;
+        const body = inSeq(parseExpr);
+        if (isKeyword(peek(), 'end')) p++;
+        return asOperand({ type: 'LetOpen', decl, body });
+      }
       // WHICH WORD it was matters and this used to throw it away. In Standard
       // ML `val` takes a PATTERN and `fun` takes a name and its parameters;
       // `val f x = e` is not a thing. Losing the distinction meant
@@ -1408,7 +1546,12 @@ export function parse(toks, fixityIn) {
         const nxt = toks[p + 1];
         return !!nxt && nxt.t !== 'EQ' && nxt.t !== 'COLON';
       };
-      if (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern()) {
+      // `fun (f ** g) (x, y) = …` and `fun (op +) (a, b) = …`. Tried before the
+      // pattern branch below, which sees the `(` and reads the whole left-hand
+      // side as something to bind. Never for `val`, which really does take a
+      // pattern there.
+      const infLhs = saidVal ? null : infixLhs();
+      if (!infLhs && (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern())) {
         const pat = valTakesPattern() ? parsePattern() : parsePatternAtom();
         eat('EQ');
         const value = parseExpr();
@@ -1427,8 +1570,10 @@ export function parse(toks, fixityIn) {
         }
         return { type: 'TopLetPat', pat, value };
       }
-      const nameTok = eat('IDENT');
-      const params = letParams();
+      // `fun (f ** g) (x, y) = …` and `fun (op +) (a, b) = …` name the function
+      // where it will be used. Nothing is consumed when it is neither.
+      const nameTok = infLhs ? { t: 'IDENT', v: infLhs.name } : eat('IDENT');
+      const params = infLhs ? [...infLhs.params, ...letParams()] : letParams();
       let ann = null;
       if (peek().t === 'COLON') { p++; ann = parseTypeExpr(); }
       eat('EQ');

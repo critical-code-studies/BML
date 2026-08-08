@@ -55,6 +55,22 @@ function readEscaped(src, from, n, close) {
       if (!/^[0-9]{3}$/.test(m)) throw new RonmlError('a \\ddd escape needs exactly three digits');
       out += String.fromCharCode(Number(m)); j += 4; continue;
     }
+    // `\^A` is the control character whose code is the letter's minus 64, so
+    // `\^A` is 1 and `\^[` is 27. The Definition's own spelling for the ones
+    // that have no letter of their own.
+    if (e === '^') {
+      const c = src[j + 2];
+      if (!c || c.charCodeAt(0) < 64 || c.charCodeAt(0) > 95) {
+        throw new RonmlError('a \\^ escape takes one character from @ to _');
+      }
+      out += String.fromCharCode(c.charCodeAt(0) - 64); j += 3; continue;
+    }
+    // `\uXXXX`, four hex digits.
+    if (e === 'u') {
+      const h = src.slice(j + 2, j + 6);
+      if (!/^[0-9a-fA-F]{4}$/.test(h)) throw new RonmlError('a \\u escape needs exactly four hex digits');
+      out += String.fromCharCode(parseInt(h, 16)); j += 6; continue;
+    }
     throw new RonmlError(`unknown escape \\${e}`);
   }
   return { text: out, at: j };
