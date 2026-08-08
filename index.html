@@ -483,9 +483,11 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
     on purpose:</p>
     <table class="figures">
       <tr><td>the stack</td><td><b>The one real divergence.</b> Non-tail
-          recursion is bounded by the host's stack, so a deep recursion that
-          does not return through a tail call stops rather than finishing. Tail
-          calls are proper, as the Definition requires.</td></tr>
+          recursion is bounded by the host's stack. Measured, a first run
+          reaches a depth of about <b>1,200</b>, and about 4,200 once the
+          browser has compiled the evaluator, so a recursion deeper than that
+          stops rather than finishing. Tail calls are proper, as the Definition
+          requires, and are bounded by nothing.</td></tr>
       <tr><td>no <code>OS</code></td><td>On purpose, and it will not change:
           nothing behind this has a file system, and a structure that answered
           would be lying about the machine it is on.</td></tr>

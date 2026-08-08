@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.35.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.36.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -36,7 +36,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.35.0, a little Standard ML
+BML 0.36.0, a little Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -198,28 +198,28 @@ Not SML '97. The full Basis of 47 structures, sharing constraints and functor
 signatures are years of work no teaching implementation attempts.
 
 The gaps are catalogued rather than described, in a register that a test walks
-so that fixing one turns the test red and names the entry to delete. About 18%
-of Harper's corpus still does not run as written.
+so that fixing one turns the test red and names the entry to delete. The
+register is currently empty. About 13% of Harper's corpus does not run as
+written, and some of that cannot: parts of it were never valid Standard ML.
 
-The Basis is 16 structures of roughly 47: `List` `String` `Char` `Int` `Real`
-`Bool` `Option` `ListPair` `Math` `Array` `Vector` `Word` `Substring` `General`
-`TextIO` `IO`. There is no `OS`, and there is not going to be one: nothing sits
-behind this that has a file system or processes.
+The Basis is 29 structures of roughly 47, and 430 members. There is no `OS`,
+and there is not going to be one: nothing sits behind this that has a file
+system or processes. `Date` is therefore UTC only, since local time needs a
+timezone and there is no operating system here to hold one.
 
-`Word` is an int that prints in hex rather than a real fixed-width word — no
-wrap-around, no unsigned division — and a `Substring` is the string it denotes
-rather than a window onto a base. Both are said here rather than discovered.
+`Word` arithmetic does not wrap: `0wxFFFFFFFF + 0w1` answers `0w100000000`
+where a 32-bit word gives `0w0`. The bitwise operators do mask correctly, so
+`notb 0w0` is `0wxFFFFFFFF`. And a `Substring` is the string it denotes rather
+than a window onto a base, so `Substring.base` reports an offset of 0 whatever
+the substring was cut from. Both are said here rather than discovered.
 
-Nothing in the Basis outside `List`, `String`, `Char`, `Int`, `Real`, `Bool`,
-`Option`, `ListPair`. Identifiers are lower-cased, which Standard ML does not
-do, so `foo` and `Foo` name the same value.
-
-**Non-tail** recursion depth is the host's rather than the interpreter's, so
-`fun fact n = … n * fact (n - 1)` runs out of JavaScript stack in the low
-thousands before the step budget notices. Tail calls are proper, as the
-Definition requires, so an accumulator loop or a continuation-passing program
-runs to whatever depth the step budget allows and does not touch the stack at
-all.
+**Non-tail** recursion depth is the host's rather than the interpreter's.
+Measured, a first run manages about **1,200** and about 4,200 once the browser
+has compiled the evaluator, after which `fun fact n = … n * fact (n - 1)` runs
+out of JavaScript stack before the step budget notices. Tail calls are proper,
+as the Definition requires, so an accumulator loop or a continuation-passing
+program runs to whatever depth the step budget allows and does not touch the
+stack at all.
 
 ## The update check
 

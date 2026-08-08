@@ -230,106 +230,19 @@ function applyBinOp(op, l, r) {
   }
 }
 
-// PROPER TAIL CALLS (docs/tail-calls-plan.md). Standard ML requires them, and
-// this evaluator did not have them: every sub-expression recursed, so how deep a
-// program could go was whatever the host stack had left. `count 5000` faulted at
-// about 1950, and the same program passed alone and failed inside a full test
-// run, which made one test a barometer for unrelated changes.
+// The declaration and module forms, lifted out of evalNode.
 //
-// The body is a loop. In every TAIL position — where the value of the
-// sub-expression IS the value of this one — the case reassigns `node` (and
-// `env`, `ctx`, `builtins` where they change) and `continue`s, rather than
-// calling back into evalNode and waiting. The step counter is inside the loop,
-// so a tail loop still counts and the budget still bounds a program that never
-// comes back.
+// V8 sizes a stack frame for every local a function declares, not for the ones
+// the branch actually taken uses. evalNode was one switch holding 92 of them,
+// so a recursive program reserved room for StructApply's twelve and OpenDecl's
+// six on every call, and ran out of host stack at a depth of 686. None of these
+// cases can appear inside a recursion: they are what a program declares, not
+// what it computes. Out here they cost one frame when a structure is declared
+// and nothing at all thereafter.
 //
-// This does NOT make non-tail recursion unbounded. `fact n = n * fact (n-1)` has
-// work to do after the call returns, so its frames are genuinely needed and it
-// stays where it was. See stage 2 in the plan for what removing that would cost.
-export function evalNode(node, env, ctx, builtins) {
-  for (;;) {
-  if (++STEPS > FUEL) throw new RonmlFuelError('step budget exceeded');
+// Measured in docs/deep-recursion-plan.md.
+function evalDecl(node, env, ctx, builtins) {
   switch (node.type) {
-    case 'Lit': return { tag: node.real ? 'real' : 'int', v: node.value };
-    case 'CharLit': return { tag: 'char', v: node.value };
-    case 'Neg': {
-      const x = evalNode(node.arg, env, ctx, builtins);
-      if (!x || (x.tag !== 'int' && x.tag !== 'real')) throw new RonmlError(`${describeValue(x)} is not a number`);
-      return { tag: x.tag, v: -x.v };
-    }
-    case 'StrLit': return { tag: 'str', v: node.value };
-    case 'Lam': return { tag: 'closure', param: node.param, body: node.body, env, ctx, builtins };
-    case 'Bin': return applyBinOp(node.op, evalNode(node.left, env, ctx, builtins), evalNode(node.right, env, ctx, builtins));
-    // Cons builds a list by putting one value on the front of another list,
-    // which is the definition rather than a convenience: Harper (1993, p.9)
-    // gives the empty list and cons as the two cases a list can be.
-    case 'Append': {
-      const a = evalNode(node.left, env, ctx, builtins);
-      const b = evalNode(node.right, env, ctx, builtins);
-      if (!a || a.tag !== 'list') throw new RonmlError(`${describeValue(a)} is not a list — @ joins two lists`);
-      if (!b || b.tag !== 'list') throw new RonmlError(`${describeValue(b)} is not a list — @ joins two lists`);
-      return { tag: 'list', items: [...a.items, ...b.items] };
-    }
-    case 'Cons': {
-      const head = evalNode(node.head, env, ctx, builtins);
-      const tail = evalNode(node.tail, env, ctx, builtins);
-      if (!tail || tail.tag !== 'list') throw new RonmlError(`${describeValue(tail)} is not a list — :: puts a value on the front of a list`);
-      return { tag: 'list', items: [head, ...tail.items] };
-    }
-    case 'Seq': {
-      evalNode(node.left, env, ctx, builtins);   // run the left for its effect, discard its value
-      node = node.right;
-      continue;
-    }
-    case 'Bool': {
-      const l = evalNode(node.left, env, ctx, builtins);
-      if (!l || l.tag !== 'bool') throw new RonmlError(`${describeValue(l)} is not true or false`);
-      if (node.op === 'and' && !l.v) return { tag: 'bool', v: false };   // short-circuit
-      if (node.op === 'or' && l.v) return { tag: 'bool', v: true };
-      const r = evalNode(node.right, env, ctx, builtins);
-      if (!r || r.tag !== 'bool') throw new RonmlError(`${describeValue(r)} is not true or false`);
-      return { tag: 'bool', v: r.v };
-    }
-    case 'If': {
-      const c = evalNode(node.cond, env, ctx, builtins);
-      if (!c || c.tag !== 'bool') throw new RonmlError('if needs a true/false test — try: if n == 0 then 1 else 0');
-      node = c.v ? node.then : node.else;
-      continue;
-    }
-    case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
-    // `#[1, 2, 3]` — the same value `Vector.fromList [1, 2, 3]` makes. A vector
-    // compares structurally where an array has identity, which is why the two
-    // are separate tags and this is not a list.
-    case 'VectorLit': return { tag: 'vector', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
-    case 'Unit': return { tag: 'unit' };
-    case 'Deref': {
-      const r = evalNode(node.arg, env, ctx, builtins);
-      if (!r || r.tag !== 'ref') throw new RonmlError(`${describeValue(r)} is not a ref`);
-      return r.cell.v;
-    }
-    case 'Assign': {
-      const r = evalNode(node.target, env, ctx, builtins);
-      if (!r || r.tag !== 'ref') throw new RonmlError(`${describeValue(r)} is not a ref`);
-      r.cell.v = evalNode(node.value, env, ctx, builtins);
-      return { tag: 'unit' };
-    }
-    case 'Annot': node = node.expr; continue;
-    case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
-    case 'Record': {
-      const fields = {};
-      for (const f of node.fields) fields[f.label] = evalNode(f.value, env, ctx, builtins);
-      return { tag: 'record', fields };
-    }
-    // #label and #1 are functions, not syntax, so they may be passed around:
-    // `map #name people` works because #name is a value like any other.
-    case 'Select': return { tag: 'select', label: node.label };
-
-    // Declaring a datatype puts its constructors where names are looked up.
-    // A nullary one IS a value; one that takes arguments is a function that
-    // collects them and then is a value. Nothing is checked, because there is
-    // nothing here to check with.
-    case 'TypeAbbrev': return { tag: 'typename', name: node.name };
-
     // An exception is a constructor that can be raised. Declaring one puts it
     // where names are looked up, exactly like a datatype's constructors.
     case 'ExnDecl': {
@@ -355,29 +268,31 @@ export function evalNode(node, env, ctx, builtins) {
       return { tag: 'exndecl', name: node.name };
     }
 
-    case 'Raise': {
-      const v = evalNode(node.arg, env, ctx, builtins);
-      throw new RonmlRaise(v);
-    }
-
-    case 'Handle': {
-      try {
-        return evalNode(node.body, env, ctx, builtins);
-      } catch (e) {
-        if (!(e instanceof RonmlRaise)) throw e;
-        for (const arm of node.arms) {
-          const binds = matchPattern(arm.pat, e.value, ctx);
-          if (!binds) continue;
-          const scope = Object.create(env);
-          for (const k of Object.keys(binds)) scope[nameKey(k)] = binds[k];
-          return evalNode(arm.body, scope, ctx, builtins);
-        }
-        throw e;                 // not ours: let it keep going up
+    case 'Datatype': {
+      const store = (ctx && ctx.session) || {};
+      const reg = (store.__cons = store.__cons || {});
+      // `datatype t = datatype u` shares u's CONSTRUCTORS. Every one of them is
+      // registered again under this type's name, keeping its own identity, so a
+      // value made with u's constructor matches a pattern written against t —
+      // which is the whole point, and the half that the exception replication
+      // got wrong on the first attempt.
+      if (node.alias) {
+        const src = store.__datacons && store.__datacons[node.alias];
+        const names = src || [];
+        if (!names.length) throw new RonmlError(`${node.alias} is not a datatype`);
+        (store.__datacons = store.__datacons || {})[node.name] = names.slice();
+        return { tag: 'datatype', name: node.name, cons: names.slice() };
       }
+      (store.__datacons = store.__datacons || {})[node.name] = node.cons.map((c) => c.name);
+      for (const c of node.cons) {
+        reg[c.name] = { name: c.name, arity: c.arity, of: node.name };
+        store[nameKey(c.name)] = c.arity === 0
+          ? { tag: 'con', name: c.name, args: [] }
+          : { tag: 'confn', name: c.name, arity: c.arity, args: [] };
+      }
+      return { tag: 'datatype', name: node.name, cons: node.cons.map((c) => c.name) };
     }
 
-    // A structure's declarations run in a scope of their own and are then
-    // published. Pulled out because local, functor and structure all do it.
     case 'Local': {
       const store = (ctx && ctx.session) || {};
       const inner = Object.create(env);
@@ -509,8 +424,92 @@ export function evalNode(node, env, ctx, builtins) {
       return { tag: 'struct', name: node.name, names: published };
     }
 
+    // A structure runs its declarations in a scope of their own and then
+    // publishes them under a prefix, so `Board.size` finds what `size` became.
+    // `:>` publishes only the names the signature lists, which is the real work
+    // a signature does even without a checker behind it: everything else stays
+    // inside, and a caller reaching for it does not find it.
+    case 'StructDecl': {
+      const store = (ctx && ctx.session) || {};
+      const inner = Object.create(env);
+      for (const d of node.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
+      const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;
+      const published = [];
+      for (const k of Object.keys(inner)) {
+        if (k.startsWith('__')) continue;
+        const bare = k;
+        if (allowed && !allowed.some((n) => nameKey(n) === bare)) continue;
+        store[`${nameKey(node.name)}.${bare}`] = inner[k];
+        published.push(bare);
+      }
+      // Constructors declared inside are visible through the prefix too.
+      const icons = inner.__cons || {};
+      const reg = (store.__cons = store.__cons || {});
+      for (const c of Object.keys(icons)) reg[c] = icons[c];
+      return { tag: 'struct', name: node.name, names: published };
+    }
+
+    case 'SigDecl': {
+      const store = (ctx && ctx.session) || {};
+      (store.__sigs = store.__sigs || {})[node.name] = node.names;
+      return { tag: 'sig', name: node.name, names: node.names };
+    }
+
+    // `signature B = A where type … = …`: B inherits A's public names. The
+    // where-type refinement is a no-op here, since signatures track names and
+    // not types.
+    case 'SigAbbrev': {
+      const store = (ctx && ctx.session) || {};
+      const names = (store.__sigs || {})[node.from];
+      if (!names) throw new RonmlError(`no signature ${node.from} to name`);
+      (store.__sigs = store.__sigs || {})[node.name] = names;
+      return { tag: 'sig', name: node.name, names };
+    }
+
+    // `open S` copies a structure's published names into scope without their
+    // prefix. The members are stored flat as `s.member`, so this is a scan for
+    // that prefix and a copy — the same shape the structure case writes.
+    case 'OpenDecl': {
+      const store = (ctx && ctx.session) || {};
+      const opened = [];
+      for (const name of node.names) {
+        const pre = `${nameKey(name)}.`;
+        let found = 0;
+        for (let e = store; e && e !== Object.prototype; e = Object.getPrototypeOf(e)) {
+          for (const k of Object.keys(e)) {
+            if (!k.startsWith(pre)) continue;
+            const bare = k.slice(pre.length);
+            if (bare.includes('.')) continue;      // a nested structure stays qualified
+            if (!(bare in env)) { env[bare] = e[k]; found++; }
+          }
+        }
+        // Constructors too: `open` on a structure holding a datatype brings its
+        // constructors, which is most of why anyone opens anything.
+        const cons = store.__cons || {};
+        for (const k of Object.keys(cons)) {
+          if (nameKey(k).startsWith(pre)) {
+            cons[k.slice(pre.length)] = cons[k];
+            found++;
+          }
+        }
+        if (!found) throw new RonmlError(`no structure ${name} to open`);
+        opened.push(name);
+      }
+      return { tag: 'struct', name: opened.join(' '), names: [] };
+    }
+
     // Fixity is applied at parse time; this persists it so the NEXT line parsed
     // in this session sees it too.
+    case 'FixityDecl': {
+      const store = (ctx && ctx.session) || {};
+      const tbl = (store.__fixity = store.__fixity || defaultFixity());
+      for (const n of node.names) {
+        if (node.word === 'nonfix') delete tbl[n];
+        else tbl[n] = [node.prec, node.assoc];
+      }
+      return { tag: 'unit' };
+    }
+
     // A chain of simultaneous declarations. Evaluated in order into the same
     // environment, which is what makes `fun ev … and od …` mutually recursive:
     // both land in the session before either is called.
@@ -569,10 +568,152 @@ export function evalNode(node, env, ctx, builtins) {
       if (names.length > 1) return { tag: 'bindings', names, values };
       return last;
     }
+    default:
+      throw new RonmlError('malformed command');
+  }
+}
 
-    // `open S` copies a structure's published names into scope without their
-    // prefix. The members are stored flat as `s.member`, so this is a scan for
-    // that prefix and a copy — the same shape the structure case writes.
+// The evaluator.
+// PROPER TAIL CALLS (docs/tail-calls-plan.md). Standard ML requires them, and
+// this evaluator did not have them: every sub-expression recursed, so how deep a
+// program could go was whatever the host stack had left. `count 5000` faulted at
+// about 1950, and the same program passed alone and failed inside a full test
+// run, which made one test a barometer for unrelated changes.
+//
+// The body is a loop. In every TAIL position — where the value of the
+// sub-expression IS the value of this one — the case reassigns `node` (and
+// `env`, `ctx`, `builtins` where they change) and `continue`s, rather than
+// calling back into evalNode and waiting. The step counter is inside the loop,
+// so a tail loop still counts and the budget still bounds a program that never
+// comes back.
+//
+// This does NOT make non-tail recursion unbounded. `fact n = n * fact (n-1)` has
+// work to do after the call returns, so its frames are genuinely needed and it
+// stays where it was. See stage 2 in the plan for what removing that would cost.
+export function evalNode(node, env, ctx, builtins) {
+  for (;;) {
+  if (++STEPS > FUEL) throw new RonmlFuelError('step budget exceeded');
+  switch (node.type) {
+    case 'Lit': return { tag: node.real ? 'real' : 'int', v: node.value };
+    case 'CharLit': return { tag: 'char', v: node.value };
+    case 'Neg': {
+      const x = evalNode(node.arg, env, ctx, builtins);
+      if (!x || (x.tag !== 'int' && x.tag !== 'real')) throw new RonmlError(`${describeValue(x)} is not a number`);
+      return { tag: x.tag, v: -x.v };
+    }
+    case 'StrLit': return { tag: 'str', v: node.value };
+    case 'Lam': return { tag: 'closure', param: node.param, body: node.body, env, ctx, builtins };
+    case 'Bin': return applyBinOp(node.op, evalNode(node.left, env, ctx, builtins), evalNode(node.right, env, ctx, builtins));
+    // Cons builds a list by putting one value on the front of another list,
+    // which is the definition rather than a convenience: Harper (1993, p.9)
+    // gives the empty list and cons as the two cases a list can be.
+    case 'Append': {
+      const a = evalNode(node.left, env, ctx, builtins);
+      const b = evalNode(node.right, env, ctx, builtins);
+      if (!a || a.tag !== 'list') throw new RonmlError(`${describeValue(a)} is not a list — @ joins two lists`);
+      if (!b || b.tag !== 'list') throw new RonmlError(`${describeValue(b)} is not a list — @ joins two lists`);
+      return { tag: 'list', items: [...a.items, ...b.items] };
+    }
+    case 'Cons': {
+      const head = evalNode(node.head, env, ctx, builtins);
+      const tail = evalNode(node.tail, env, ctx, builtins);
+      if (!tail || tail.tag !== 'list') throw new RonmlError(`${describeValue(tail)} is not a list — :: puts a value on the front of a list`);
+      return { tag: 'list', items: [head, ...tail.items] };
+    }
+    case 'Seq': {
+      evalNode(node.left, env, ctx, builtins);   // run the left for its effect, discard its value
+      node = node.right;
+      continue;
+    }
+    case 'Bool': {
+      const l = evalNode(node.left, env, ctx, builtins);
+      if (!l || l.tag !== 'bool') throw new RonmlError(`${describeValue(l)} is not true or false`);
+      if (node.op === 'and' && !l.v) return { tag: 'bool', v: false };   // short-circuit
+      if (node.op === 'or' && l.v) return { tag: 'bool', v: true };
+      const r = evalNode(node.right, env, ctx, builtins);
+      if (!r || r.tag !== 'bool') throw new RonmlError(`${describeValue(r)} is not true or false`);
+      return { tag: 'bool', v: r.v };
+    }
+    case 'If': {
+      const c = evalNode(node.cond, env, ctx, builtins);
+      if (!c || c.tag !== 'bool') throw new RonmlError('if needs a true/false test — try: if n == 0 then 1 else 0');
+      node = c.v ? node.then : node.else;
+      continue;
+    }
+    case 'ListLit': return { tag: 'list', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    // `#[1, 2, 3]` — the same value `Vector.fromList [1, 2, 3]` makes. A vector
+    // compares structurally where an array has identity, which is why the two
+    // are separate tags and this is not a list.
+    case 'VectorLit': return { tag: 'vector', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    case 'Unit': return { tag: 'unit' };
+    case 'Deref': {
+      const r = evalNode(node.arg, env, ctx, builtins);
+      if (!r || r.tag !== 'ref') throw new RonmlError(`${describeValue(r)} is not a ref`);
+      return r.cell.v;
+    }
+    case 'Assign': {
+      const r = evalNode(node.target, env, ctx, builtins);
+      if (!r || r.tag !== 'ref') throw new RonmlError(`${describeValue(r)} is not a ref`);
+      r.cell.v = evalNode(node.value, env, ctx, builtins);
+      return { tag: 'unit' };
+    }
+    case 'Annot': node = node.expr; continue;
+    case 'Tuple': return { tag: 'tuple', items: node.items.map((it) => evalNode(it, env, ctx, builtins)) };
+    case 'Record': {
+      const fields = {};
+      for (const f of node.fields) fields[f.label] = evalNode(f.value, env, ctx, builtins);
+      return { tag: 'record', fields };
+    }
+    // #label and #1 are functions, not syntax, so they may be passed around:
+    // `map #name people` works because #name is a value like any other.
+    case 'Select': return { tag: 'select', label: node.label };
+
+    // Declaring a datatype puts its constructors where names are looked up.
+    // A nullary one IS a value; one that takes arguments is a function that
+    // collects them and then is a value. Nothing is checked, because there is
+    // nothing here to check with.
+    case 'TypeAbbrev': return { tag: 'typename', name: node.name };
+
+    // Declarations and module forms. Their bodies live in evalDecl so their
+    // local variables are not part of every recursive call's stack frame.
+    case 'ExnDecl':
+    case 'Datatype':
+    case 'Local':
+    case 'FunctorDecl':
+    case 'StructAlias':
+    case 'StructApply':
+    case 'StructDecl':
+    case 'SigDecl':
+    case 'SigAbbrev':
+    case 'OpenDecl':
+    case 'FixityDecl':
+    case 'Decls':
+      return evalDecl(node, env, ctx, builtins);
+
+    case 'Raise': {
+      const v = evalNode(node.arg, env, ctx, builtins);
+      throw new RonmlRaise(v);
+    }
+
+    case 'Handle': {
+      try {
+        return evalNode(node.body, env, ctx, builtins);
+      } catch (e) {
+        if (!(e instanceof RonmlRaise)) throw e;
+        for (const arm of node.arms) {
+          const binds = matchPattern(arm.pat, e.value, ctx);
+          if (!binds) continue;
+          const scope = Object.create(env);
+          for (const k of Object.keys(binds)) scope[nameKey(k)] = binds[k];
+          return evalNode(arm.body, scope, ctx, builtins);
+        }
+        throw e;                 // not ours: let it keep going up
+      }
+    }
+
+    // A structure's declarations run in a scope of their own and are then
+    // published. Pulled out because local, functor and structure all do it.
+
     // `while c do e` answers unit and is there for its effects: a ref being
     // assigned, something printed. Bounded by the same step budget as anything
     // else, so a loop that never ends faults rather than hanging.
@@ -594,112 +735,6 @@ export function evalNode(node, env, ctx, builtins) {
       const inner = Object.create(env);
       evalNode(node.decl, inner, ctx, builtins);
       return evalNode(node.body, inner, ctx, builtins);
-    }
-
-    case 'OpenDecl': {
-      const store = (ctx && ctx.session) || {};
-      const opened = [];
-      for (const name of node.names) {
-        const pre = `${nameKey(name)}.`;
-        let found = 0;
-        for (let e = store; e && e !== Object.prototype; e = Object.getPrototypeOf(e)) {
-          for (const k of Object.keys(e)) {
-            if (!k.startsWith(pre)) continue;
-            const bare = k.slice(pre.length);
-            if (bare.includes('.')) continue;      // a nested structure stays qualified
-            if (!(bare in env)) { env[bare] = e[k]; found++; }
-          }
-        }
-        // Constructors too: `open` on a structure holding a datatype brings its
-        // constructors, which is most of why anyone opens anything.
-        const cons = store.__cons || {};
-        for (const k of Object.keys(cons)) {
-          if (nameKey(k).startsWith(pre)) {
-            cons[k.slice(pre.length)] = cons[k];
-            found++;
-          }
-        }
-        if (!found) throw new RonmlError(`no structure ${name} to open`);
-        opened.push(name);
-      }
-      return { tag: 'struct', name: opened.join(' '), names: [] };
-    }
-
-    case 'FixityDecl': {
-      const store = (ctx && ctx.session) || {};
-      const tbl = (store.__fixity = store.__fixity || defaultFixity());
-      for (const n of node.names) {
-        if (node.word === 'nonfix') delete tbl[n];
-        else tbl[n] = [node.prec, node.assoc];
-      }
-      return { tag: 'unit' };
-    }
-
-    case 'SigDecl': {
-      const store = (ctx && ctx.session) || {};
-      (store.__sigs = store.__sigs || {})[node.name] = node.names;
-      return { tag: 'sig', name: node.name, names: node.names };
-    }
-
-    // `signature B = A where type … = …`: B inherits A's public names. The
-    // where-type refinement is a no-op here, since signatures track names and
-    // not types.
-    case 'SigAbbrev': {
-      const store = (ctx && ctx.session) || {};
-      const names = (store.__sigs || {})[node.from];
-      if (!names) throw new RonmlError(`no signature ${node.from} to name`);
-      (store.__sigs = store.__sigs || {})[node.name] = names;
-      return { tag: 'sig', name: node.name, names };
-    }
-
-    // A structure runs its declarations in a scope of their own and then
-    // publishes them under a prefix, so `Board.size` finds what `size` became.
-    // `:>` publishes only the names the signature lists, which is the real work
-    // a signature does even without a checker behind it: everything else stays
-    // inside, and a caller reaching for it does not find it.
-    case 'StructDecl': {
-      const store = (ctx && ctx.session) || {};
-      const inner = Object.create(env);
-      for (const d of node.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
-      const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;
-      const published = [];
-      for (const k of Object.keys(inner)) {
-        if (k.startsWith('__')) continue;
-        const bare = k;
-        if (allowed && !allowed.some((n) => nameKey(n) === bare)) continue;
-        store[`${nameKey(node.name)}.${bare}`] = inner[k];
-        published.push(bare);
-      }
-      // Constructors declared inside are visible through the prefix too.
-      const icons = inner.__cons || {};
-      const reg = (store.__cons = store.__cons || {});
-      for (const c of Object.keys(icons)) reg[c] = icons[c];
-      return { tag: 'struct', name: node.name, names: published };
-    }
-
-    case 'Datatype': {
-      const store = (ctx && ctx.session) || {};
-      const reg = (store.__cons = store.__cons || {});
-      // `datatype t = datatype u` shares u's CONSTRUCTORS. Every one of them is
-      // registered again under this type's name, keeping its own identity, so a
-      // value made with u's constructor matches a pattern written against t —
-      // which is the whole point, and the half that the exception replication
-      // got wrong on the first attempt.
-      if (node.alias) {
-        const src = store.__datacons && store.__datacons[node.alias];
-        const names = src || [];
-        if (!names.length) throw new RonmlError(`${node.alias} is not a datatype`);
-        (store.__datacons = store.__datacons || {})[node.name] = names.slice();
-        return { tag: 'datatype', name: node.name, cons: names.slice() };
-      }
-      (store.__datacons = store.__datacons || {})[node.name] = node.cons.map((c) => c.name);
-      for (const c of node.cons) {
-        reg[c.name] = { name: c.name, arity: c.arity, of: node.name };
-        store[nameKey(c.name)] = c.arity === 0
-          ? { tag: 'con', name: c.name, args: [] }
-          : { tag: 'confn', name: c.name, arity: c.arity, args: [] };
-      }
-      return { tag: 'datatype', name: node.name, cons: node.cons.map((c) => c.name) };
     }
 
     // The eliminator. Arms are tried in order and the first that matches wins,

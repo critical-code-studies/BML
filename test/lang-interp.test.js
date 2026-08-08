@@ -1853,6 +1853,37 @@ test('the language holds nothing of the game', () => {
   }
 });
 
+test('evalNode stays slim, so a recursion gets a deep enough stack', () => {
+  // docs/deep-recursion-plan.md. V8's INTERPRETER sizes a frame for every local
+  // a function declares, not for the ones the branch taken uses. evalNode was
+  // one switch holding 92, so every ML call reserved room for StructApply's
+  // twelve, and `List.tabulate (1000, f)` ran out of host stack at 505. Moving
+  // the declaration cases into evalDecl took it to 1191.
+  //
+  // The optimiser does proper register allocation, so once V8 has compiled
+  // evalNode the dead locals cost nothing and the limit is ~4200 either way.
+  // That is why this walks the SOURCE: inside a test run evalNode is warm and a
+  // depth assertion would pass against the defect. Only the local count is
+  // visible to a test.
+  const src = fs.readFileSync(new URL('../src/eval.js', import.meta.url), 'utf8');
+  const lines = src.split('\n');
+  const from = lines.findIndex((l) => l.startsWith('export function evalNode'));
+  assert.ok(from > 0, 'found evalNode');
+  const to = from + 1 + lines.slice(from + 1).findIndex((l) => l === '}');
+  const locals = lines.slice(from, to).filter((l) => /^\s+(const|let) /.test(l)).length;
+  assert.ok(locals <= 45, `evalNode declares ${locals} locals; it was 92 and is meant to stay near 36`);
+});
+
+test('a thousand-element list can be built', () => {
+  // The bound that a person actually meets. 505 before the evalDecl split.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  assert.equal(bml.run('List.length (List.tabulate (1000, fn i => i))').text, '1000');
+  bml.run('fun sum [] = 0 | sum (x::r) = x + sum r');
+  assert.equal(bml.run('sum (List.tabulate (1000, fn i => 1))').text, '1000',
+    'and walked back down non-tail-recursively');
+});
+
 test('the Basis: the members Phase 1 filled in', () => {
   // docs/basis-plan.md. Every one called once against its answer — the
   // checklist compares answers too, but it is a list of FEATURES and this is a
