@@ -27,10 +27,16 @@
     --case-lip:    rgba(255,255,255,.045);
     --screen-edge: rgba(0,0,0,.6);
     --bloom:       rgba(60,224,122,.045);
+    /* THE SCREEN IS THE ACTIVE AREA and reads brighter than the page around
+       it. The transcript inherited the page's body colour, so the live thing
+       sat at the same level as the furniture beside it. */
+    --scr-fg:  #e8ece2;
+    --scr-dim: #9aa294;
   }
   html[data-phos="amber"] {
     --glow: #ffb642; --ty: #d9c07a; --in: #ffeccd; --fg: #d6c9ae; --dim: #7d7157;
     --bloom: rgba(255,182,66,.05);
+    --scr-fg: #f2e6cd; --scr-dim: #a2957a;
   }
   html[data-phos="paper"] {
     --bg: #f6f5f1; --fg: #23241f; --dim: #6a6c62; --glow: #1c5c33; --in: #000;
@@ -41,6 +47,7 @@
     --case-lip:    rgba(255,255,255,.7);
     --screen-edge: rgba(0,0,0,.14);
     --bloom:       rgba(0,0,0,.012);
+    --scr-fg: #14150f; --scr-dim: #575950;
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -131,21 +138,28 @@
     padding: .5rem 0 0; font-size: 12px; color: var(--dim);
   }
   .bar .sp { flex: 1 1 auto; }
+  /* Quiet. These are page furniture next to a lit screen, and at screen
+     brightness they pulled the eye away from the thing they sit under. They
+     come up on hover, which is when you are looking at them. */
   .bar button {
-    font: inherit; background: transparent; color: var(--fg);
+    font: inherit; background: transparent; color: var(--dim);
     border: 1px solid var(--rule); border-radius: 2px; padding: .22rem .45rem; cursor: pointer;
   }
   .bar button:hover { border-color: var(--glow); color: var(--glow); }
   .bar label { display: inline-flex; gap: .35rem; align-items: center; cursor: pointer; }
+  /* The browser's own checkbox is a saturated blue that belongs to no screen
+     here. */
+  .bar input[type=checkbox] { accent-color: var(--dim); }
 
   #screen {
     margin: 0; padding: .75rem .8rem 1rem; height: 26rem; overflow-y: auto;
     font-size: 13.5px; line-height: 1.55; cursor: text;
+    color: var(--scr-fg);
   }
   @media (max-width: 40rem) { #screen { height: 21rem; } }
   #screen .i   { color: var(--in); }
   #screen .sys { color: var(--glow); }
-  #screen .p   { color: var(--dim); }
+  #screen .p   { color: var(--scr-dim); }
   #screen .ty  { color: var(--ty); }
   #screen .e   { color: var(--err); }
   .row { white-space: pre-wrap; word-break: break-word; }
@@ -166,11 +180,14 @@
   .prog-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .45rem; font-size: 12px; color: var(--dim); }
   .prog-head .sp { flex: 1 1 auto; }
   .prog-head select, .prog-head button {
-    font: inherit; font-size: 12px; background: transparent; color: var(--fg);
+    font: inherit; font-size: 12px; background: transparent; color: var(--dim);
     border: 1px solid var(--rule); border-radius: 2px; padding: .22rem .45rem; cursor: pointer;
   }
-  .prog-head button.go { color: var(--bg); background: var(--glow); border-color: var(--glow); font-weight: 600; }
-  .prog-head select:hover, .prog-head button:hover { border-color: var(--glow); }
+  /* `run` is the one action here, so it keeps the phosphor. As a solid block
+     it was the brightest thing on the page, brighter than the screen it acts
+     on, which had it shouting over the terminal. Outlined instead. */
+  .prog-head button.go { color: var(--glow); border-color: var(--rule); }
+  .prog-head select:hover, .prog-head button:hover { border-color: var(--glow); color: var(--glow); }
   #src {
     width: 100%; min-height: 11rem; resize: vertical; font: inherit; font-size: 13.5px;
     background: var(--panel); color: var(--fg);
