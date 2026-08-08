@@ -35,6 +35,7 @@ export const PRELUDE = [
   'exception Empty',
   'exception UnequalLengths',
   'exception Div',
+  'exception Overflow',
   'exception Subscript',
   'exception Match',
   '(* Fail CARRIES A STRING, which the other four do not. `raise Fail "no such',

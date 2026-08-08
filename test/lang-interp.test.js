@@ -604,13 +604,18 @@ test('the budget still bounds a program that never comes back', () => {
 });
 
 test('non-tail recursion is still bounded, and says so honestly', () => {
-  // `fact` does work AFTER the call returns, so its frames are genuinely
+  // `deep` does work AFTER the call returns, so its frames are genuinely
   // needed. It got deeper (the If frames on the way are gone) but it is not
   // unbounded, and the README says so rather than implying the problem is gone.
+  //
+  // It ADDS rather than multiplies. This was written with `fact`, and once ints
+  // learnt to raise Overflow at 9007199254740991 the probe stopped measuring
+  // depth and started measuring the range of int: `fact 20` is 2.4e18 and
+  // raises before the recursion gets anywhere near the stack.
   const bml = createInterpreter({ typecheck: 'off' });
-  bml.run('fun fact n = if n = 0 then 1 else n * fact (n - 1)');
-  assert.equal(bml.run('fact 20', { fuel: 10000000 }).ok, true);
-  assert.equal(bml.run('fact 2500', { fuel: 100000000 }).ok, true, 'deeper than the old ~2000 ceiling');
+  bml.run('fun deep n = if n = 0 then 0 else 1 + deep (n - 1)');
+  assert.equal(bml.run('deep 20', { fuel: 10000000 }).ok, true);
+  assert.equal(bml.run('deep 2500', { fuel: 100000000 }).ok, true, 'deeper than the old ~2000 ceiling');
 });
 
 test('a closure carries its own ctx and builtins through a tail jump', () => {
@@ -1851,6 +1856,40 @@ test('the language holds nothing of the game', () => {
       assert.equal(m, null, `${f}:${i + 1} names ${m && m[0]} in code: ${line.trim()}`);
     });
   }
+});
+
+test('an int that leaves the range raises Overflow', () => {
+  // `Int.maxInt` has answered 9007199254740991 and `Int.precision` 53 since the
+  // Basis was written, and the arithmetic went straight past both: `fact 500`
+  // answered `Infinity`, which is not an int, and every comparison after that
+  // was against something no longer whole. A silent wrong answer.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  const raises = (src) => {
+    const r = bml.run(src);
+    assert.equal(r.ok, false, `${src} should raise`);
+    assert.match(r.text, /Overflow/, src);
+  };
+  raises('9007199254740991 + 1');
+  raises('~9007199254740991 - 1');
+  raises('4611686018427387904 * 4');
+  bml.run('fun fact 0 = 1 | fact n = n * fact (n - 1)');
+  raises('fact 500');
+
+  // It is catchable by name, like Div and Empty.
+  assert.equal(bml.run('(9007199254740991 + 1) handle Overflow => ~1').text, '~1');
+
+  // The edge itself is fine, and ordinary arithmetic is untouched.
+  assert.equal(bml.run('9007199254740990 + 1').text, '9007199254740991');
+  assert.equal(bml.run('fact 18').text, '6402373705728000');
+
+  // REALS ARE NOT CHECKED. `1E308 * 10.0` is `inf` in Standard ML too, and an
+  // overflowing real is not an error there.
+  assert.equal(bml.run('1E308 * 10.0').text, 'inf');
+
+  // And IntInf is unbounded, which is the whole reason it exists.
+  assert.equal(bml.run('IntInf.toString (IntInf.pow (IntInf.fromInt 2, 100))').text,
+    '"1267650600228229401496703205376"');
 });
 
 test('evalNode stays slim, so a recursion gets a deep enough stack', () => {

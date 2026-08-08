@@ -206,10 +206,25 @@ function applyBinOp(op, l, r) {
   }
   const tag = isReal(l) ? 'real' : 'int';
 
+  // AN INT THAT LEAVES THE RANGE RAISES, as Standard ML's does. `Int.maxInt`
+  // has answered 9007199254740991 since the Basis was written and the
+  // arithmetic went straight past it, so `fact 500` answered `Infinity` and
+  // every comparison after that was against something no longer whole. Reals
+  // are NOT checked: `1E308 * 10.0` is `inf` in Standard ML too.
+  const ranged = (v) => {
+    if (tag === 'int' && !Number.isSafeInteger(v)) {
+      throw new RonmlRaise({
+        tag: 'con', name: 'Overflow', args: [],
+        why: 'the answer is outside the range of int. Int.maxInt is 9007199254740991; IntInf is unbounded.',
+      });
+    }
+    return { tag, v };
+  };
+
   switch (op) {
-    case 'PLUS': return { tag, v: a + b };
-    case 'MINUS': return { tag, v: a - b };
-    case 'STAR': return { tag, v: a * b };
+    case 'PLUS': return ranged(a + b);
+    case 'MINUS': return ranged(a - b);
+    case 'STAR': return ranged(a * b);
     case 'SLASH':
       if (tag !== 'real') throw new RonmlError('/ divides reals. For whole numbers use div');
       if (b === 0) throw new RonmlError('division by zero');

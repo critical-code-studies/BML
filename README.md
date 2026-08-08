@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.36.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.37.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -30,7 +30,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.36.0, a 2026 Standard ML
+BML 0.37.0, a 2026 Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -60,6 +60,10 @@ the standard ones catchable by name), mutable references, `while … do`,
 
 Identifiers are case-sensitive, as Standard ML's are: `foo` and `Foo` are two
 names.
+
+`int` is 53-bit, which is what `Int.precision` and `Int.maxInt` report, and an
+operation that leaves the range raises `Overflow` rather than quietly becoming a
+float. `IntInf` is unbounded. Reals overflow to `inf`, as Standard ML's do.
 
 Tail calls are proper, as the Definition requires, so an accumulator loop or a
 continuation-passing program runs to whatever depth the step budget allows

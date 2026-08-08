@@ -76,4 +76,18 @@ test('the README head carries the credit and the version, and they agree', () =>
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url).pathname, 'utf8'));
   assert.match(head, new RegExp(`Version ${pkg.version.replace(/[.]/g, '\\.')}`),
     `the README head says a different version from package.json (${pkg.version})`);
+
+  // AND src/index.js, which is the version the REPL and the page PRINT.
+  //
+  // That file is synced from NostOS, so tools/sync-bml.sh overwrites it and the
+  // version reverts to whatever NostOS's src/lang/index.js holds. 0.36.0 was
+  // released with BML_VERSION still reading 0.35.0 for exactly that reason: the
+  // sync ran, silently put the old number back, and a hand-bump afterwards
+  // matched nothing. Bump it in NostOS, where it lives, and let the sync carry
+  // it. Nothing else notices.
+  const idx = fs.readFileSync(new URL('../src/index.js', import.meta.url).pathname, 'utf8');
+  const printed = (idx.match(/BML_VERSION = '([^']+)'/) || [])[1];
+  assert.equal(printed, pkg.version,
+    `src/index.js prints ${printed} and package.json says ${pkg.version}. `
+    + 'Bump it in NostOS src/lang/index.js: the sync overwrites this file.');
 });
