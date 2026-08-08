@@ -12,7 +12,7 @@
 // because the answer changes. It found twelve gaps in one run, of which two
 // were silent wrong answers rather than absences.
 //
-// It is A CHECKLIST, not the Definition: 82 cases somebody wrote down, so a
+// It is A CHECKLIST, not the Definition: 86 cases somebody wrote down, so a
 // perfect score means every case here passes and nothing more. The corpus
 // figure is the one to quote.
 //
@@ -63,6 +63,17 @@ const CASES = [
   // ---- types --------------------------------------------------------------
   ['types', 'let-polymorphism', ['fun id x = x'], '(id 1, id "a")', '(1, "a")'],
   ['types', 'type annotation honoured', [], '(5 : int)', '5'],
+  // One case for annotations was not enough. `(5 : int)` passed while four
+  // ordinary uses were refused, all four in a position where the binding form
+  // REPEATS — which is why they are four cases here and not one.
+  ['types', 'annotation on a clause after |',
+    ['fun g (m:int, 0):int = m | g (0, n:int):int = n'], 'g (0, 7)', '7'],
+  ['types', 'annotation on a later val of a let',
+    [], 'let val m:int = 3 val n:int = m*m in m*n end', '27'],
+  ['types', 'annotation on an `and` continuation',
+    ['val u1 : int = 1 and u2 : int = 2'], 'u1 + u2', '3'],
+  ['types', 'annotation in a record pattern field',
+    ['fun dst {x = x : real, y = y : real} = x + y'], 'dst {x = 3.0, y = 4.0}', '7.0'],
   ['types', 'parameterised datatype', ["datatype 'a box = Box of 'a"], 'Box 1', 'Box 1'],
   ['types', 'recursive datatype', ["datatype t = L | N of t * int * t"], 'N (L, 1, L)', 'N (L, 1, L)'],
   ['types', 'type abbreviation', ['type count = int'], '(5 : count)', '5'],

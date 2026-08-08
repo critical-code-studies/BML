@@ -84,8 +84,8 @@ from Robert Harper's *Introduction to Standard ML* course, this build runs
 node tools/isml-conformance.mjs
 ```
 
-And against a checklist of the Definition — 82 features, one case each, passing
-only on an exact match — it scores **82/82**:
+And against a checklist of the Definition — 86 features, one case each, passing
+only on an exact match — it scores **86/86**:
 
 ```
 node tools/sml-checklist.mjs
