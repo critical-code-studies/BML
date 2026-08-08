@@ -505,9 +505,27 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
 <dialog id="m-pop">
   <div class="m-head"><h2>POP-11 and Poplog</h2><button data-close>esc</button></div>
   <div class="m-body">
-    <p>POP-11 was written at Sussex in 1975, became the core of
-    Poplog, ran in UK departments through the 1980s and 1990s, and acquired a
-    Standard ML in the end.</p>
+    <p><b>What it is.</b> POP-11 is a language for AI work: interactive,
+    garbage-collected, dynamically typed, with a pattern matcher for lists and a
+    compiler you can call while the program is running, so a procedure you type
+    is there a second later. Its own idea is an <b>open stack</b>. A procedure
+    takes whatever arguments it needs off the stack and puts its results back,
+    so one can return two values, or none, and assignment is written the other
+    way round: <code>3 -&gt; x</code>. Sloman's verdict on that is worth having
+    from him rather than from an admirer: it supported elegant constructs and
+    "could lead to obscure bugs", and he thought it paid.</p>
+
+    <p><b>Where Standard ML comes in.</b> POP-11 became the core of Poplog, and
+    Poplog's virtual machine was given incremental compilers for other languages
+    on top of it: Prolog in 1982, Common Lisp in 1983, and then Standard ML,
+    written by Robert Duncan and Simon Nichols. So ML ran on POP-11's own
+    machine and picked up its arbitrary-precision arithmetic on the way. The two
+    languages answer the same question in opposite directions, and Sloman knew
+    it: POP-11 left the types to run time, and he wanted the checking back, so
+    with ML in Poplog one could write "those procedures that require the compile
+    time checking and run-time efficiency of a typed language". POP-11 was
+    written at Sussex in 1975 and ran in UK departments through the 1980s and
+    1990s.</p>
 
 <pre class="tree">POP-2        Edinburgh
   │
