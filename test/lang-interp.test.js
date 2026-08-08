@@ -1852,3 +1852,74 @@ test('the language holds nothing of the game', () => {
     });
   }
 });
+
+test('the Basis: the members Phase 1 filled in', () => {
+  // docs/basis-plan.md. Every one called once against its answer — the
+  // checklist compares answers too, but it is a list of FEATURES and this is a
+  // list of members, so it belongs here.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  const is = (src, want) => assert.equal(bml.run(src).text, want, src);
+
+  // List
+  is('List.hd [1,2]', '1');
+  is('List.tl [1,2]', '[2]');
+  is('List.getItem [1,2]', 'SOME (1, [2])');
+  is('List.revAppend ([1,2],[3])', '[2, 1, 3]');
+  is('List.mapPartial (fn x => if x > 1 then SOME x else NONE) [1,2,3]', '[2, 3]');
+  is('List.collate Int.compare ([1,2],[1,3])', 'LESS');
+  // ListPair, which had two of a dozen
+  is('ListPair.zipEq ([1],[2])', '[(1, 2)]');
+  is('ListPair.map (fn (a,b) => a+b) ([1,2],[3,4])', '[4, 6]');
+  is('ListPair.all (fn (a,b) => a < b) ([1],[2])', 'true');
+  is('ListPair.foldl (fn (a,b,c) => a+b+c) 0 ([1],[2])', '3');
+  is('(ListPair.zipEq ([1],[2,3])) handle UnequalLengths => nil', '[]');
+  // Option
+  is('Option.mapPartial (fn x => SOME (x+1)) (SOME 1)', 'SOME 2');
+  is('Option.compose (fn x => x+1, fn y => SOME y) 1', 'SOME 2');
+  // Vector
+  is('Vector.update (#[1,2,3], 1, 9)', '#[1, 9, 3]');
+  is('Vector.mapi (fn (i,x) => i+x) #[10,20]', '#[10, 21]');
+  is('Vector.foldli (fn (i,x,a) => i+x+a) 0 #[1,2]', '4');
+  // Char
+  is('Char.isPunct #","', 'true');
+  is('Char.isHexDigit #"f"', 'true');
+  is('Char.succ #"a"', '#"b"');
+  is('Char.contains "abc" #"b"', 'true');
+  // String
+  is('String.str #"a"', '"a"');
+  is('String.isSuffix "lo" "hello"', 'true');
+  is('String.isSubstring "ell" "hello"', 'true');
+  // Substring, which had ten of thirty
+  is('Substring.getc "ab"', 'SOME (#"a", "b")');
+  is('Substring.splitAt ("abcd", 2)', '("ab", "cd")');
+  is('Substring.dropl (fn c => c = #" ") "  hi"', '"hi"');
+  is('Substring.splitl Char.isAlpha "ab1"', '("ab", "1")');
+  // Int and Real
+  is('Int.quot (~7, 2)', '~3');
+  is('Int.rem (~7, 2)', '~1');
+  is('Real.floor ~2.5', '~3');
+  is('Real.ceil 2.1', '3');
+  is('Real.rem (7.5, 2.0)', '1.5');
+  is('Real.round 3.7', '4', 'and round still reads the primitive, not Real.floor');
+  is('Time.toReal 1500', '1.5');
+});
+
+test('StringCvt, and the constructor payload it exposed', () => {
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  assert.equal(bml.run('StringCvt.HEX').text, 'HEX');
+  assert.equal(bml.run('StringCvt.padLeft #"0" 4 "7"').text, '"0007"');
+  assert.equal(bml.run('StringCvt.padRight #"." 4 "ab"').text, '"ab.."');
+  assert.equal(bml.run('StringCvt.skipWS "  hi"').text, '"hi"');
+
+  // `GEN of int option` typed its payload as plain `int`: typeOfWords named
+  // `list` and nothing else, so any other type constructor was DROPPED and the
+  // head taken. Writing StringCvt is what found it.
+  assert.equal(bml.run('StringCvt.GEN NONE').text, 'GEN NONE');
+  assert.equal(bml.run('StringCvt.FIX (SOME 2)').text, 'FIX (SOME 2)');
+  bml.run('datatype box = B of int option');
+  assert.equal(bml.typeReport('B'), 'int option -> box');
+  bml.run('datatype lb = LB of string list');
+  assert.equal(bml.typeReport('LB'), 'string list -> lb', 'and list is unaffected');
+});

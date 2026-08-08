@@ -1152,6 +1152,14 @@ function typeOfWords(ws, selfType, selfName, tyvars) {
   };
   if (ws.length === 1) return baseOf(head) || fresh();
   if (last === 'list') { const b = baseOf(head); return b ? listOf(b) : fresh(); }
+  // `int option`, `string tree` — ANY type constructor applied to arguments,
+  // not just `list`. Only `list` was named here, so everything else fell to the
+  // line at the bottom, which takes the head and DROPS the constructor:
+  // `GEN of int option` typed as plain `int`, and the option was gone.
+  if (!BASE_TYPES[last] && !(tyvars && Object.prototype.hasOwnProperty.call(tyvars, last))
+      && /^[a-z]/.test(last) && !(selfName && last === selfName)) {
+    return con(last, ws.slice(0, -1).map((w) => baseOf(w) || fresh()));
+  }
   // `'a tree` — a parameterised type applied to an argument, which is how a
   // recursive datatype names itself: `Node of 'a tree * 'a * 'a tree`. The
   // words arrive head-first, so the last is the constructor and the rest are
