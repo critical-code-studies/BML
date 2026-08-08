@@ -1510,8 +1510,12 @@ test('an unbound name offers what the reader probably meant', () => {
   bml.loadPrelude();
   const say = (src) => bml.run(src).text;
 
-  assert.match(say('date'), /did you mean Date\?/);
-  assert.match(say('date'), /tells capitals apart/);
+  assert.match(say('date'), /did you mean the structure Date\?/);
+  // The capitals lecture, on a name that is a plain value rather than a
+  // structure — for a structure the useful thing to say is what to call.
+  bml.run('val Threshold = 5');
+  assert.match(say('threshold'), /did you mean Threshold\?/);
+  assert.match(say('threshold'), /tells capitals apart/);
   // A word carried in from another language.
   assert.match(say('var f = 1'), /Standard ML writes val/);
   assert.match(say('function f x = x'), /Standard ML writes fun/);
@@ -1520,9 +1524,45 @@ test('an unbound name offers what the reader probably meant', () => {
   assert.match(say('lenght [1,2]'), /did you mean length\?/);
   assert.match(say('prnt "x"'), /did you mean print\?/);
   // A qualified name misses on its structure more often than on its member.
-  assert.match(say('Lst.map'), /no structure Lst — did you mean List\?/);
+  assert.match(say('Lst.map'), /did you mean the structure List\? try List\./);
   // And when there is nothing sensible to say, it says nothing.
   assert.equal(say('zqxjw'), 'ERR: unbound variable: zqxjw');
   // A name that IS bound is unaffected.
   assert.equal(bml.run('val x = 1').ok, true);
+});
+
+test('a structure is named as one, not reported as an unbound variable', () => {
+  // A structure is not a value, so `Date` on its own is an error in Standard ML
+  // too — but "unbound variable: Date" is a poor way to say it, and worse when
+  // the line above has just suggested Date to somebody who typed `date`.
+  const bml = createInterpreter({ typecheck: 'off', clock: () => 0 });
+  bml.loadPrelude();
+  const say = (s) => bml.run(s).text;
+
+  assert.match(say('Date'), /Date is a structure, not a value/);
+  assert.match(say('Date'), /try Date\./);
+  assert.match(say('val f = Date'), /is a structure, not a value/);
+  // The suggestion carries the advice through rather than sending a reader
+  // from one unbound name to another.
+  assert.match(say('date'), /did you mean the structure Date\? try Date\./);
+  // Callable members come first: ordering by key put the month constructors in
+  // front, which are the least useful thing in there.
+  assert.match(say('Date'), /Date\.fromTime/);
+  // And the structure's own workings stay private.
+  assert.equal(bml.run('Date.monthOf 0').ok, false, 'monthOf is local to Date');
+  assert.equal(say('Date.toString (Date.fromTimeUniv 0)'), '"Thu Jan 01 00:00:00 1970"');
+});
+
+test('an unfinished binding says what is missing, not which token', () => {
+  // `val d : Date` answered "expected eq, got 'EOF'", which says what the
+  // parser wanted rather than what the reader left out.
+  const bml = createInterpreter({ typecheck: 'off', clock: () => 0 });
+  bml.loadPrelude();
+  assert.match(bml.run('val d : Date').text, /needs a value as well as a type/);
+  assert.match(bml.run('val d').text, /needs a value: val d = 0/);
+  assert.match(bml.run('fun f x').text, /needs a body: fun f x = x/);
+  // The finished forms are untouched — these rules fire only after a parse has
+  // already failed, but that is worth asserting rather than assuming.
+  assert.equal(bml.run('val d2 : int = 0').ok, true);
+  assert.equal(bml.run('fun f2 x = x').ok, true);
 });

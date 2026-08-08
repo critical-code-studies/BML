@@ -109,7 +109,24 @@ export function suggestName(name, known = []) {
   return null;
 }
 
+// A line that is not finished. These fire only after something has already
+// failed to parse, and each shape is one that is NEVER valid however it ends,
+// so none of them can hide a real error the way a not-fitted rule can.
+//
+// The parser's own words for these name the token it stopped on — "expected eq,
+// got 'EOF'" — which tells a reader what the parser wanted, not what they left
+// out.
+const UNFINISHED = [
+  [/^\s*val\s+[A-Za-z_][\w']*\s*:\s*[\w'. *()>-]+$/,
+   'a val binding needs a value as well as a type: val d : int = 0'],
+  [/^\s*val\s+[A-Za-z_][\w']*\s*$/,
+   'a val binding needs a value: val d = 0'],
+  [/^\s*fun\s+[A-Za-z_][\w']*(\s+[A-Za-z_(][\w')]*)*\s*$/,
+   'a fun binding needs a body: fun f x = x'],
+];
+
 export function diagnose(src) {
   for (const [re, why] of NOT_FITTED) if (re.test(src)) return why;
+  for (const [re, why] of UNFINISHED) if (re.test(src)) return why;
   return null;
 }

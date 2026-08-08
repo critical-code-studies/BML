@@ -261,10 +261,45 @@ export function createInterpreter(opts = {}) {
     return [...out];
   }
 
+  /** The members of a structure, if that is what this name is. */
+  function membersOf(name) {
+    const pre = `${name}.`;
+    // FUNCTIONS first. Ordering by key put `Date.Jan, Date.Feb, Date.Mar` in
+    // front — the month constructors, which are the least useful thing in
+    // there. What a reader wants named is something they can call.
+    const all = Object.keys(session)
+      .filter((k) => k.startsWith(pre) && !k.slice(pre.length).includes('.'));
+    const isFn = (k) => {
+      const t = (session[k] || {}).tag;
+      return t === 'closure' || t === 'builtin' || t === 'confn';
+    };
+    return [...all.filter(isFn), ...all.filter((k) => !isFn(k))]
+      .slice(0, 3)
+      .map((k) => k.slice(pre.length));
+  }
+
   /** "unbound variable: date" plus, where there is one, what to try instead. */
   function unboundText(name) {
+    // A STRUCTURE is not a value, so naming one on its own is an error in
+    // Standard ML too — but "unbound variable: Date" is a poor way to say it,
+    // and worse when the line above has just suggested Date. Say what it is and
+    // what to reach for inside it.
+    const own = membersOf(name);
+    if (own.length) {
+      return `ERR: ${name} is a structure, not a value — try ${own.map((k) => `${name}.${k}`).join(', ')}`;
+    }
     const hint = suggestName(name, knownNames());
-    return hint ? `ERR: unbound variable: ${name} — ${hint}` : `ERR: unbound variable: ${name}`;
+    if (!hint) return `ERR: unbound variable: ${name}`;
+    // If the suggestion IS a structure, carry the same advice through, so the
+    // reader is not sent from one unbound name to another.
+    const m = /did you mean ([A-Za-z_][\w']*)\?/.exec(hint);
+    const theirs = m ? membersOf(m[1]) : [];
+    if (theirs.length) {
+      // One sentence, not two run together: the reader wants the name and one
+      // thing to type, not the case lecture as well.
+      return `ERR: unbound variable: ${name} — did you mean the structure ${m[1]}? try ${m[1]}.${theirs[0]}`;
+    }
+    return `ERR: unbound variable: ${name} — ${hint}`;
   }
 
   function run(source, hostCtx) {
