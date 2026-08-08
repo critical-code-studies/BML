@@ -1649,3 +1649,50 @@ test('a qualified name whose structure is right is judged on its MEMBER', () => 
   assert.equal(say('Date.May'), 'May');
   assert.equal(say('Date.Wed'), 'Wed');
 });
+
+test('row polymorphism: #lab constrains an argument it has not seen', () => {
+  // `case 'Select': return fresh();  // needs row polymorphism; honestly
+  // unknown` — so every projection written INSIDE a function reported `'a -> 'b`
+  // and constrained nothing. Which is every accessor in Date.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+
+  assert.equal(bml.typeReport('#a'), "{a : 'a, ...} -> 'a");
+  assert.equal(bml.typeReport('fn x => #a x'), "{a : 'a, ...} -> 'a");
+  // The field's type is constrained by what is done with it.
+  assert.equal(bml.typeReport('fn r => #a r + 1'), '{a : int, ...} -> int');
+  // `{a, ...}` is an open record, so a pattern says the same thing.
+  assert.equal(bml.typeReport('fn {a, ...} => a'), "{a : 'a, ...} -> 'a");
+  assert.equal(bml.typeReport('fn {a, b} => a'), "{a : 'a, b : 'b} -> 'a", 'and a closed one stays closed');
+
+  // A projection that cannot work is refused where it is written.
+  const bad = bml.run('(fn x => #a x) {b = 1}');
+  assert.equal(bad.ok, false);
+  assert.match(bad.text, /has no field a/);
+  // Date's accessors, which is what started this.
+  assert.match(bml.typeReport('Date.year'), /^\{year : /);
+});
+
+test('records unify BY LABEL, not by position', () => {
+  // Position was all this had. So the same record written in two field orders
+  // was refused for disagreeing about field one, and two records with different
+  // labels but the same width were accepted as the same type and failed at RUN
+  // time instead.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+
+  bml.run('fun tk (r : {a : int, b : string}) = #a r');
+  assert.equal(bml.run('tk {b = "x", a = 1}').text, '1', 'the same record, written in the other order');
+  assert.equal(bml.run('tk {a = 1, b = "x"}').text, '1');
+
+  bml.run('fun tk2 (r : {a : int, b : int}) = #a r');
+  const wrong = bml.run('tk2 {c = 1, d = 2}');
+  assert.equal(wrong.ok, false, 'different labels are a different type');
+  assert.match(wrong.text, /not the same type|has no field/);
+
+  // A generalised record type keeps its labels through instantiation — it was
+  // rebuilt without them, so any reuse lost the fields.
+  bml.run('fun pair x = {a = x, b = x}');
+  assert.equal(bml.typeReport('pair 1'), '{a : int, b : int}');
+  assert.equal(bml.typeReport('pair "s"'), '{a : string, b : string}');
+});

@@ -77,10 +77,60 @@ export function unify(a, b) {
     return;
   }
   if (y.k === 'var') return unify(y, x);
+  if (x.name === 'record' && y.name === 'record') return unifyRecords(x, y);
   if (x.name !== y.name || x.args.length !== y.args.length) {
     throw new TypeError_(`${show(x)} and ${show(y)} are not the same type`);
   }
   for (let i = 0; i < x.args.length; i++) unify(x.args[i], y.args[i]);
+}
+
+// Records unify BY LABEL, not by position. Position was all this had, so
+// `{a : int, b : string}` and `{b : string, a : int}` — the same record written
+// in two orders — were refused for disagreeing about field one, and
+// `{a : int, b : int}` and `{c : int, d : int}` were accepted as the same type
+// and failed at run time instead.
+//
+// An OPEN record says "at least these", which is what `#lab` knows about the
+// thing it is given. Meeting a closed one it must be a subset, and then it
+// BECOMES that closed record — a mutation, as `x.ref = y` is for a variable,
+// and safe for the same reason: `instantiate` rebuilds a record per use.
+function unifyRecords(x, y) {
+  const at = (r, l) => r.args[r.labels.indexOf(l)];
+  const has = (r, l) => r.labels.includes(l);
+
+  if (!x.open && !y.open) {
+    if (x.labels.length !== y.labels.length || !x.labels.every((l) => has(y, l))) {
+      throw new TypeError_(`${show(x)} and ${show(y)} are not the same type`);
+    }
+    for (const l of x.labels) unify(at(x, l), at(y, l));
+    return;
+  }
+
+  if (x.open && y.open) {
+    for (const l of x.labels) if (has(y, l)) unify(at(x, l), at(y, l));
+    const labels = [...x.labels, ...y.labels.filter((l) => !has(x, l))];
+    const args = labels.map((l) => (has(x, l) ? at(x, l) : at(y, l)));
+    becomeRecord(x, labels, args, true);
+    becomeRecord(y, labels, args, true);
+    return;
+  }
+
+  const open = x.open ? x : y;
+  const closed = x.open ? y : x;
+  for (const l of open.labels) {
+    if (!has(closed, l)) {
+      throw new TypeError_(`${show(closed)} has no field ${l}`);
+    }
+    unify(at(open, l), at(closed, l));
+  }
+  becomeRecord(open, closed.labels, closed.args, false);
+}
+
+/** Make one record type into another, in place, so every reference sees it. */
+function becomeRecord(r, labels, args, open) {
+  r.labels = labels;
+  r.args = args;
+  r.open = open;
 }
 
 // ---- schemes and environments ----------------------------------------------
@@ -140,6 +190,9 @@ function instantiate(s) {
   const go = (t) => {
     const p = prune(t);
     if (p.k === 'var') return map.get(p.id) || p;
+    // LABELS AND OPENNESS TRAVEL WITH IT. This rebuilt the con and kept neither,
+    // so a generalised record type lost its fields at the first use.
+    if (p.name === 'record') return recordOf(p.labels, p.args.map(go), p.open);
     return con(p.name, p.args.map(go));
   };
   return go(s.type);
@@ -160,7 +213,9 @@ export function show(t, names = new Map()) {
   if (p.name === '*') return p.args.map((a) => showArg(a, names)).join(' * ');
   if (p.name === 'list') return `${showArg(p.args[0], names)} list`;
   if (p.name === 'record') {
-    return `{${p.labels.map((l, i) => `${l} : ${show(p.args[i], names)}`).join(', ')}}`;
+    const fields = p.labels.map((l, i) => `${l} : ${show(p.args[i], names)}`);
+    if (p.open) fields.push('...');
+    return `{${fields.join(', ')}}`;
   }
   if (!p.args.length) return p.name;
   // Standard ML brackets a type constructor's arguments once there is more
@@ -175,9 +230,12 @@ function showArg(t, names) {
   return (p.k === 'con' && (p.name === '->' || p.name === '*')) ? `(${s})` : s;
 }
 
-export function recordOf(labels, types) {
+// A record type. OPEN means "at least these fields", which is what `#lab` and a
+// `{a, ...}` pattern know about their argument; closed means "exactly these".
+export function recordOf(labels, types, open = false) {
   const c = con('record', types);
   c.labels = labels;
+  c.open = open;
   return c;
 }
 
@@ -343,7 +401,8 @@ function inferPattern(pat, binds, cons) {
     case 'record': {
       const labels = pat.fields.map((f) => f.label);
       const types = pat.fields.map((f) => inferPattern(f.pat, binds, cons));
-      return recordOf(labels, types);
+      // `{a, ...}` says "at least a", which is exactly an open record.
+      return recordOf(labels, types, !!pat.open);
     }
     case 'as': {
       const t = inferPattern(pat.pat, binds, cons);
@@ -484,8 +543,17 @@ export function infer(node, env, cons) {
           const i = parseInt(node.fn.label, 10) - 1;
           if (i >= 0 && i < at.args.length) return at.args[i];
         }
-        // Anything else needs row polymorphism and stays honestly unknown.
-        return fresh();
+        // A TUPLE label on something not yet known stays unknown: `#1` is a
+        // projection out of a tuple of unknown WIDTH, and there is no open
+        // tuple here the way there is an open record.
+        if (/^[0-9]+$/.test(node.fn.label)) return fresh();
+        // Everything else goes through the ordinary application rule now, where
+        // `#a` carries `{a : 'x, ...} -> 'x` and constrains the argument to be a
+        // record that HAS an a. That is the whole of row polymorphism: it used
+        // to stop here and answer a fresh variable.
+        const want = fresh();
+        unify(at, recordOf([node.fn.label], [want], true));
+        return want;
       }
       // A multi-argument constructor may be applied to a TUPLE, `N (a, b, c)`,
       // which is how Standard ML writes it, as well as curried, `N a b c`,
@@ -596,7 +664,13 @@ export function infer(node, env, cons) {
       return recordOf(node.fields.map((f) => f.label),
         node.fields.map((f) => infer(f.value, env, cons)));
 
-    case 'Select': return fresh();     // needs row polymorphism; honestly unknown
+    case 'Select': {
+      // `#a` is `{a : 'x, ...} -> 'x`. It was a bare fresh variable, so every
+      // projection written inside a function — which is every accessor in
+      // `Date` — reported `'a -> 'b` and constrained nothing.
+      const field = fresh();
+      return fnOf(recordOf([node.label], [field], true), field);
+    }
 
     case 'While': {
       // `while c do e` is `bool`, then `unit`, and answers `unit`. There was no

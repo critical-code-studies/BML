@@ -96,9 +96,20 @@
      rather than wrapping into nonsense. */
   @media (max-width: 30rem) { .banner { font-size: 10px; } }
   /* A slot the width of its column at the BANNER's size, holding smaller text.
-     Without it the tiny version would drag the box's right border in with it. */
-  .banner .slot { display: inline-block; overflow: hidden; vertical-align: baseline; }
-  .banner .tiny { font-size: .62em; letter-spacing: .04em; opacity: .85; }
+     Without it the tiny version would drag the box's right border in with it.
+
+     IT MUST BE EXACTLY ONE LINE TALL. On `vertical-align: baseline` an
+     inline-block aligns on the baseline of ITS last line, which here is the
+     tiny text's — not the baseline of the full-size characters either side. So
+     that one row grew by 4px and the box's left and right borders had a visible
+     gap across it, the rule broken where the version sits. Aligned to the top
+     with the line's own height and line-height, the row measures the same as
+     every other and the borders meet. */
+  .banner .slot {
+    display: inline-block; overflow: hidden;
+    vertical-align: top; height: 1.25em; line-height: 1.25em;
+  }
+  .banner .tiny { font-size: .62em; letter-spacing: .04em; opacity: .85; line-height: 1.25em; }
 
   /* ---- menu ---- */
   nav {
