@@ -156,9 +156,13 @@ export function parse(toks, fixityIn) {
       if (peek().t !== 'IDENT' || nameKey(peek().v) !== nameKey(name)) { p = save; break; }
       p++;
       const ps = letParams();
+      const ann = bindAnn();
       if (peek().t !== 'EQ') { p = save; break; }
       p++;
-      clauses.push({ params: ps, body: parseExpr() });
+      // The annotation on a clause after `|` constrains that clause's ANSWER,
+      // so it wraps the body. The first clause's goes on the whole function,
+      // which the caller has already done before handing the body over.
+      clauses.push({ params: ps, body: annotBind(parseExpr(), ann, 0) });
     }
     if (clauses.length === 1) return null;
     const n = clauses[0].params.length;
@@ -209,6 +213,36 @@ export function parse(toks, fixityIn) {
   // Harper (1993, s.2.4) treats a plain name as the simplest case of a pattern
   // rather than a separate thing, and so does this: a name comes back as a
   // string, anything else as a parsed pattern, and wrapParams tells them apart.
+  // A binding may claim its own type before the `=`: `val n : int = 3`. This is
+  // read at the FIRST binding of a run and was read nowhere else, so the second
+  // val of a `let`, an `and` continuation and a clause after `|` each refused
+  // an annotation the line above accepted.
+  function bindAnn() {
+    if (peek().t !== 'COLON') return null;
+    p++;
+    return parseTypeExpr();
+  }
+
+  /** Wrap a bound value in its annotation, if it has one. */
+  function annotBind(v, ann, nparams) {
+    return ann ? { type: 'Annot', expr: v, ann, params: nparams } : v;
+  }
+
+  // Step a LOOKAHEAD over an annotation. The two `isBind` probes decide whether
+  // an `and` starts a binding by scanning to the `=`; an annotation puts a type
+  // in the way, and brackets in the type mean this has to be depth-tracked
+  // rather than a scan for the first `=`.
+  function skipAnnAhead(q) {
+    let d = 0;
+    for (; toks[q]; q++) {
+      const t = toks[q].t;
+      if (t === 'LP' || t === 'LB' || t === 'LC') d++;
+      else if (t === 'RP' || t === 'RB' || t === 'RC') { if (d === 0) return q; d--; }
+      else if (d === 0 && (t === 'EQ' || t === 'SEMI' || t === 'EOF')) return q;
+    }
+    return q;
+  }
+
   function letParams() {
     const params = [];
     for (;;) {
@@ -337,15 +371,18 @@ export function parse(toks, fixityIn) {
           let q = p + 1;
           if (!toks[q] || toks[q].t !== 'IDENT') return false;
           while (toks[q] && (toks[q].t === 'IDENT' || toks[q].t === 'LP' || toks[q].t === 'LB')) q++;
+          if (toks[q] && toks[q].t === 'COLON') q = skipAnnAhead(q);
           return !!toks[q] && toks[q].t === 'EQ';
         };
         if ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let')) {
           p++;
           const n2 = eat('IDENT');
           const p2 = letParams();
+          const a2 = bindAnn();
           eat('EQ');
           const b2 = parseExpr();
-          extra.push({ name: n2.v, value: clausalRest(n2.v, p2, b2) || wrapParams(p2, b2) });
+          const v2 = clausalRest(n2.v, p2, b2) || wrapParams(p2, b2);
+          extra.push({ name: n2.v, value: annotBind(v2, a2, p2.length) });
           continue;
         }
         break;
@@ -464,7 +501,10 @@ export function parse(toks, fixityIn) {
         for (;;) {
           if (peek().t === 'ELLIPSIS') { p++; open = true; break; }
           const label = eat('IDENT').v;
-          if (peek().t === 'EQ') { p++; fields.push({ label, pat: parsePattern() }); }
+          // `{x = x : real}`. A field takes a pattern WITH its annotation, the
+          // same as any other pattern position; `parsePattern` alone stops at
+          // the colon and the caller then wants the `}`.
+          if (peek().t === 'EQ') { p++; fields.push({ label, pat: parsePatternAnn() }); }
           else fields.push({ label, pat: { p: 'name', name: label, args: [] } });
           if (peek().t !== 'COMMA') break;
           p++;
@@ -576,6 +616,10 @@ export function parse(toks, fixityIn) {
     // identifiers. Scanning identifiers alone made a mutually recursive
     // definition read as a boolean conjunction.
     while (toks[q] && ['IDENT', 'LP', 'LB', 'LC', 'NUM', 'STR', 'CHAR', 'NEG', 'USCORE'].includes(toks[q].t)) q++;
+    // …and then, for `and e : real = 2.17`, its own type. Without this the
+    // annotation hides the `=`, the `and` reads as a boolean conjunction, and
+    // the chain loses every name in it including the one before the `and`.
+    if (toks[q] && toks[q].t === 'COLON') q = skipAnnAhead(q);
     return !!toks[q] && toks[q].t === 'EQ';
   }
 
@@ -1298,15 +1342,18 @@ export function parse(toks, fixityIn) {
         let q = p + 1;
         if (!toks[q] || toks[q].t !== 'IDENT') return false;
         while (toks[q] && ['IDENT', 'LP', 'LB', 'LC'].includes(toks[q].t)) q++;
+        if (toks[q] && toks[q].t === 'COLON') q = skipAnnAhead(q);
         return !!toks[q] && toks[q].t === 'EQ';
       };
       while (!inBlock && inAhead() && ((isKeyword(peek(), 'and') && isBind()) || isKeyword(peek(), 'let'))) {
         p++;
         const n2 = eat('IDENT');
         const p2 = letParams();
+        const a2 = bindAnn();
         eat('EQ');
         const b2 = parseExpr();
-        extra.push({ name: n2.v, value: clausalRest(n2.v, p2, b2) || wrapParams(p2, b2) });
+        const v2 = clausalRest(n2.v, p2, b2) || wrapParams(p2, b2);
+        extra.push({ name: n2.v, value: annotBind(v2, a2, p2.length) });
       }
       if (!inBlock && isKeyword(peek(), 'in')) {
         p++;

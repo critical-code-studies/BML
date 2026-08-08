@@ -1202,3 +1202,42 @@ test('an and-chain is mutually recursive in the checker too', () => {
   bml.run('val n1 = 1; val n2 = n1 + 1');
   assert.equal(bml.run('n2').text, '2');
 });
+
+test('a type annotation is read where the binding form REPEATS', () => {
+  // Annotations were read at the first binding of a run and nowhere else, so
+  // four forms refused what the line above them accepted: a clause after `|`,
+  // the second `val` of a `let`, an `and` continuation, and a field of a record
+  // pattern. Each is checked here against its own unannotated twin, which
+  // always worked.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+
+  bml.run('fun g (m:int, 0):int = m | g (0, n:int):int = n');
+  assert.equal(bml.run('g (0, 7)').text, '7', 'a clause after `|`');
+  assert.equal(bml.typeReport('g'), '(int * int) -> int');
+
+  assert.equal(bml.run('let val m:int = 3 val n:int = m*m in m*n end').text, '27',
+    'the second val of a let');
+
+  bml.run('val r1 : real = 2.5 and r2 : real = 1.25');
+  assert.equal(bml.run('r1 + r2').text, '3.75', 'an `and` continuation');
+
+  bml.run('fun dst {x = x : real, y = y : real} = x + y');
+  assert.equal(bml.run('dst {x = 3.0, y = 4.0}').text, '7.0', 'a record pattern field');
+});
+
+test('an annotation in a repeat position is CHECKED, not just stepped over', () => {
+  // The failure mode a parser fix invites: eat the tokens, bind nothing, and
+  // every one of these lies runs.
+  const lies = [
+    'fun g2 (m:int, 0):int = m | g2 (0, n:int):string = n',
+    'let val m:int = 3 val n:string = m in n end',
+    'val a2:int = 1 and b2:string = 2',
+    'fun dst2 {x = x : real, y = y : int} = x + y',
+  ];
+  for (const src of lies) {
+    const bml = createInterpreter({ typecheck: 'strict' });
+    bml.loadPrelude();
+    assert.equal(bml.run(src).ok, false, src);
+  }
+});
