@@ -31,12 +31,15 @@
        it. The transcript inherited the page's body colour, so the live thing
        sat at the same level as the furniture beside it. */
     --scr-fg:  #e8ece2;
-    --scr-dim: #9aa294;
+    /* The machine's quieter lines are still the machine's, so they carry the
+       phosphor rather than going grey. Grey read as switched off next to the
+       green above it. */
+    --scr-dim: #a6d6b3;
   }
   html[data-phos="amber"] {
     --glow: #ffb642; --ty: #d9c07a; --in: #ffeccd; --fg: #d6c9ae; --dim: #7d7157;
     --bloom: rgba(255,182,66,.05);
-    --scr-fg: #f2e6cd; --scr-dim: #a2957a;
+    --scr-fg: #f2e6cd; --scr-dim: #dcb885;
   }
   html[data-phos="paper"] {
     --bg: #f6f5f1; --fg: #23241f; --dim: #6a6c62; --glow: #1c5c33; --in: #000;
@@ -47,7 +50,7 @@
     --case-lip:    rgba(255,255,255,.7);
     --screen-edge: rgba(0,0,0,.14);
     --bloom:       rgba(0,0,0,.012);
-    --scr-fg: #14150f; --scr-dim: #575950;
+    --scr-fg: #14150f; --scr-dim: #3d6b4b;
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
