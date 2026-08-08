@@ -969,6 +969,37 @@ export function formatAnswer(v) {
   }
 }
 
+// A real, written the way the Basis writes one.
+//
+// `Real.toString` is `Real.fmt (StringCvt.GEN NONE)`, and GEN with no argument
+// carries TWELVE significant digits. JavaScript's `String` gives the shortest
+// text that reads back as the same double, which is a different rule and shows
+// the error term: `3.14 + 2.17` printed 5.3100000000000005 where Standard ML
+// prints 5.31. Twelve digits is the whole fix; the rest of this is spelling.
+//
+// Also handled here, each of which the old one-liner got wrong: `~0.0` kept its
+// sign (JavaScript drops it), `inf` and `nan` instead of Infinity and NaN, the
+// exponent written `1E20` and `1E~7` rather than 1e+20 and 1e-7, and a number
+// big enough for JavaScript to write in exponent form, which used to have `.0`
+// stuck on the end of it and came out as `1e+21.0`.
+export function showReal(x) {
+  if (Number.isNaN(x)) return 'nan';
+  if (x === Infinity) return 'inf';
+  if (x === -Infinity) return '~inf';
+  const neg = x < 0 || Object.is(x, -0);
+  let s = Math.abs(x).toPrecision(12);
+  let exp = '';
+  const e = s.indexOf('e');
+  if (e >= 0) { exp = s.slice(e + 1); s = s.slice(0, e); }
+  // Trailing zeros in the fraction are the padding toPrecision added, not
+  // digits of the answer.
+  if (s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  if (exp) return `${neg ? '~' : ''}${s}E${exp.replace('+', '').replace('-', '~')}`;
+  // Fixed form always shows a point, which is what makes it a real on the page.
+  if (!s.includes('.')) s += '.0';
+  return `${neg ? '~' : ''}${s}`;
+}
+
 export function formatValue(v) {
   if (!v) return '()';
   switch (v.tag) {
@@ -976,7 +1007,7 @@ export function formatValue(v) {
     // Standard ML writes a negative number with a tilde, not a minus: `~3`,
     // `~1.5`. The minus sign is the binary operator and nothing else.
     case 'int': return String(v.v).replace(/^-/, '~');
-    case 'real': return (Number.isInteger(v.v) ? `${v.v}.0` : String(v.v)).replace(/^-/, '~');
+    case 'real': return showReal(v.v);
     case 'char': return v.v;
     case 'bool': return v.v ? 'true' : 'false';
     case 'str': return v.v;

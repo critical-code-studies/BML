@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createInterpreter, smlEcho, flattenSession, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
+import { createInterpreter, smlEcho, flattenSession, showReal, BML_NAME, BML_VERSION, BML_CREDIT } from '../src/index.js';
 import { DECL_KEYWORDS, BLOCK_ENDERS, joinProgram } from '../src/parse.js';
 
 test('an interpreter with no host at all still runs Standard ML', () => {
@@ -1240,4 +1240,41 @@ test('an annotation in a repeat position is CHECKED, not just stepped over', () 
     bml.loadPrelude();
     assert.equal(bml.run(src).ok, false, src);
   }
+});
+
+test('a real is written the way the Basis writes one', () => {
+  // Real.toString is Real.fmt (StringCvt.GEN NONE), which carries twelve
+  // significant digits. JavaScript's String gives the shortest text that reads
+  // back as the same double, so `3.14 + 2.17` printed 5.3100000000000005 —
+  // the error term, shown on every real answer the language gave.
+  const bml = createInterpreter({ typecheck: 'strict' });
+  bml.loadPrelude();
+  const shows = (src, want) => assert.equal(bml.run(src).text, want, src);
+
+  shows('3.14 + 2.17', '5.31');
+  shows('0.1 + 0.2', '0.3');
+  shows('1.0 / 3.0', '0.333333333333');   // twelve digits, not seventeen
+  shows('2.5 + 1.25', '3.75');            // exact in binary, unchanged
+
+  // A real always shows its point, and a negative takes a tilde.
+  shows('1.0', '1.0');
+  shows('0.0', '0.0');
+  shows('~5.31', '~5.31');
+  shows('real 7', '7.0');
+
+  // Real.toString goes through the same path, so it cannot drift from the echo.
+  shows('Real.toString (3.14 + 2.17)', '"5.31"');
+});
+
+test('showReal spells the edges the way Standard ML does', () => {
+  // Each of these was wrong before, and none of them appears in a program often
+  // enough for the suite to have noticed.
+  assert.equal(showReal(-0), '~0.0', 'JavaScript drops the sign on negative zero');
+  assert.equal(showReal(Infinity), 'inf');
+  assert.equal(showReal(-Infinity), '~inf');
+  assert.equal(showReal(NaN), 'nan');
+  assert.equal(showReal(1e20), '1E20', 'E, and no + on the exponent');
+  assert.equal(showReal(1e-7), '1E~7', 'a negative exponent takes a tilde');
+  assert.equal(showReal(1e21), '1E21', 'used to come out as 1e+21.0');
+  assert.equal(showReal(1e11), '100000000000.0', 'fixed while it fits');
 });

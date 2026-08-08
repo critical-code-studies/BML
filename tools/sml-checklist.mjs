@@ -12,7 +12,7 @@
 // because the answer changes. It found twelve gaps in one run, of which two
 // were silent wrong answers rather than absences.
 //
-// It is A CHECKLIST, not the Definition: 86 cases somebody wrote down, so a
+// It is A CHECKLIST, not the Definition: 88 cases somebody wrote down, so a
 // perfect score means every case here passes and nothing more. The corpus
 // figure is the one to quote.
 //
@@ -27,6 +27,11 @@ const CASES = [
   ['core', 'unary minus (~)', [], '~3 + 1', '~2'],
   ['core', 'div and mod', [], '(17 div 5, 17 mod 5)', '(3, 2)'],
   ['core', 'real arithmetic', [], '1.5 + 2.5', '4.0'],
+  // 1.5 + 2.5 is exact in binary and says nothing about how a real is WRITTEN.
+  // Real.toString carries twelve significant digits, so an inexact sum has to
+  // round to them rather than show the error term.
+  ['core', 'real printed to 12 significant digits', [], '3.14 + 2.17', '5.31'],
+  ['core', 'real division to 12 digits', [], '1.0 / 3.0', '0.333333333333'],
   ['core', 'string concat', [], '"a" ^ "b"', '"ab"'],
   ['core', 'char literal', [], '#"a"', '#"a"'],
   ['core', 'comparison chain', [], '(1 < 2, "a" < "b", #"a" < #"b")', '(true, true, true)'],
