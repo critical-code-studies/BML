@@ -1,3 +1,12 @@
+// BML — a 2026 Standard ML.
+// Copyright (C) 2026 David M. Berry
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version. This program is distributed WITHOUT ANY WARRANTY; see the GNU
+// General Public License for details: <https://www.gnu.org/licenses/>.
+
 // Every file in examples/ must run, under the DEFAULT checker.
 //
 // They are documentation, and documentation that does not run is worse than

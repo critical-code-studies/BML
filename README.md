@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.40.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.40.0** · GPL-3.0-or-later · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -262,8 +262,21 @@ export BML_NO_UPDATE_CHECK=1
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE). Harper's example corpus is his own teaching material
-and is not included here under any licence; the conformance harness fetches it.
+**GNU General Public License, version 3 or (at your option) any later version.**
+The full text is in [LICENSE](LICENSE).
+
+Copyright © 2026 David M. Berry, sole copyright holder.
+
+**Every version is covered, including the ones released before this one.** BML
+was published under the MIT licence up to 0.39.1 and is relicensed here to the
+GPL, retrospectively, which the copyright holder may do. One thing that cannot
+be undone and is stated rather than glossed: a copy somebody already received
+under MIT stays usable by that person under MIT, because a licence already
+granted cannot be withdrawn. Everything distributed from 0.40.0 onward, and
+every earlier version as re-published here, is GPL.
+
+Harper's example corpus is his own teaching material and is not included here
+under any licence; the conformance harness fetches it.
 
 ## Credit
 

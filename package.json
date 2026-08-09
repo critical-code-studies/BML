@@ -3,7 +3,7 @@
   "version": "0.40.0",
   "description": "A 2026 Standard ML, in plain JavaScript",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "author": "David M. Berry",
   "repository": {
     "type": "git",
