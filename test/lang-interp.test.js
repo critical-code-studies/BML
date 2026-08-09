@@ -1884,6 +1884,86 @@ test('the language holds nothing of the game', () => {
   }
 });
 
+test('a qualified constructor in a PATTERN is a constructor, not a variable', () => {
+  // A pattern name that is not a registered constructor is read as a variable,
+  // and a variable matches anything. Constructors were registered under their
+  // bare name only, so `Col.Red` in a pattern matched whatever it was handed and
+  // took the first arm every time. Silent, and it reached the Basis: every
+  // `fmt` in the library dispatches on a StringCvt constructor, so `Real.fmt`
+  // and `Int.fmt` answered as though every format were the first one.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  bml.run('structure Col = struct datatype t = Red | Green | Blue end');
+
+  assert.equal(bml.run('case Col.Green of Col.Red => 1 | _ => 2').text, '2',
+    'Col.Red must not match a Green');
+  bml.run('fun g Col.Red = 1 | g Col.Green = 2 | g Col.Blue = 3');
+  assert.equal(bml.run('g Col.Red').text, '1');
+  assert.equal(bml.run('g Col.Green').text, '2');
+  assert.equal(bml.run('g Col.Blue').text, '3');
+
+  // The bare name still works, and the two spellings are ONE constructor: the
+  // matcher compares against the canonical name, so a value made one way
+  // matches a pattern written the other.
+  bml.run('open Col');
+  assert.equal(bml.run('case Blue of Col.Blue => 1 | _ => 2').text, '1', 'one constructor, two spellings');
+  assert.equal(bml.run('case Col.Blue of Blue => 1 | _ => 2').text, '1', 'and the other way round');
+
+  // A structure that does not have it is still a plain variable pattern, which
+  // is what Standard ML does with an unknown name.
+  assert.equal(bml.run('case Col.Blue of Bogus.Red => 1 | _ => 2').text, '1',
+    'an unknown qualified name is a variable, so it matches and binds');
+});
+
+test('the Basis: every fmt obeys the format it is handed', () => {
+  // All six were `fun fmt _ x = toString x`. The argument was accepted and
+  // dropped, so the answer was the same whatever was asked for.
+  const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
+  bml.loadPrelude();
+  const is = (src, want) => assert.equal(bml.run(src).text, want, src);
+
+  is('Real.fmt (StringCvt.FIX (SOME 2)) 3.14159', '"3.14"');
+  is('Real.fmt (StringCvt.FIX (SOME 0)) 3.7', '"4"');
+  is('Real.fmt (StringCvt.FIX NONE) 1.5', '"1.500000"');       // six is the Basis default
+  is('Real.fmt (StringCvt.SCI (SOME 2)) 1234.5', '"1.23E3"');
+  is('Real.fmt (StringCvt.SCI (SOME 3)) 0.00123', '"1.230E~3"');  // a tilde exponent
+  is('Real.fmt (StringCvt.GEN (SOME 3)) 3.14159', '"3.14"');      // significant digits
+  is('Real.fmt (StringCvt.FIX (SOME 2)) ~3.14159', '"~3.14"');    // and a tilde minus
+
+  is('Int.fmt StringCvt.BIN 5', '"101"');
+  is('Int.fmt StringCvt.OCT 8', '"10"');
+  is('Int.fmt StringCvt.DEC 42', '"42"');
+  is('Int.fmt StringCvt.HEX 255', '"FF"');                        // capitals, as SML writes them
+  is('Int.fmt StringCvt.HEX ~255', '"~FF"');
+
+  is('Word.fmt StringCvt.BIN 0w5', '"101"');
+  is('Word.fmt StringCvt.HEX 0w255', '"FF"');
+  is('Word8.fmt StringCvt.HEX (Word8.fromInt 255)', '"FF"');
+  is('IntInf.fmt StringCvt.HEX (IntInf.fromInt 255)', '"FF"');
+
+  is('Time.fmt 3 (Time.fromSeconds 1)', '"1.000"');
+  is('Time.fmt 0 (Time.fromSeconds 2)', '"2"');
+
+  // toString is untouched: it is GEN NONE and always was.
+  is('Real.toString 3.14159', '"3.14159"');
+  is('Word.toString 0w255', '"FF"');
+});
+
+test('Word.~ wraps round zero', () => {
+  // A word has no sign, so its negation is what wrapping gives. It was unbound
+  // in both structures. `+`, `-` and `*` are still missing and cannot be
+  // written yet: their bodies would need the operator being defined, which
+  // wants a `local` — and a `local` after any other declaration inside a
+  // `struct` is refused. See the register.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('Word.~ 0w1').text, '4294967295');
+  assert.equal(bml.run('Word.toString (Word.~ 0w1)').text, '"FFFFFFFF"');
+  assert.equal(bml.run('Word.~ 0w0').text, '0');
+  assert.equal(bml.run('Word8.~ 0w1').text, '255', 'eight bits, so 255 rather than 4294967295');
+  assert.equal(bml.run('Word8.~ 0w0').text, '0');
+});
+
 test('an int that leaves the range raises Overflow', () => {
   // `Int.maxInt` has answered 9007199254740991 and `Int.precision` 53 since the
   // Basis was written, and the arithmetic went straight past both: `fact 500`

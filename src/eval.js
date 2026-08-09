@@ -447,6 +447,14 @@ function evalDecl(node, env, ctx, builtins) {
     case 'StructDecl': {
       const store = (ctx && ctx.session) || {};
       const inner = Object.create(env);
+      // WHICH CONSTRUCTORS THIS STRUCTURE ADDS, taken as a before-and-after.
+      // `inner.__cons` is not a fresh table: reading it walks the prototype
+      // chain to the enclosing one, so a struct body registers straight into
+      // the session's own registry and the two are the same object. Qualifying
+      // everything in it, once per structure, re-qualified names that were
+      // already qualified — `word.stringcvt.col.red` — and the prelude never
+      // finished loading.
+      const before = new Set(Object.keys(store.__cons || {}));
       for (const d of node.decls) evalNode(d, inner, { ...ctx, session: inner }, builtins);
       const allowed = node.ascribe ? ((store.__sigs || {})[node.ascribe] || null) : null;
       const published = [];
@@ -458,9 +466,22 @@ function evalDecl(node, env, ctx, builtins) {
         published.push(bare);
       }
       // Constructors declared inside are visible through the prefix too.
+      //
+      // UNDER THE QUALIFIED NAME AS WELL, which is the half that was missing.
+      // A pattern name that is not a registered constructor is read as a
+      // VARIABLE, and a variable matches anything — so `case c of
+      // StringCvt.HEX => …` took the first arm whatever it was handed, and
+      // `Real.fmt` answered as though every format were the first one. Silent,
+      // and in the Basis itself. Registering `Col.Red` beside `Red` is enough:
+      // the matcher already compares against the constructor's canonical name,
+      // so the two spellings are one constructor, and `Bogus.Red` still fails
+      // rather than matching anything at all.
       const icons = inner.__cons || {};
       const reg = (store.__cons = store.__cons || {});
-      for (const c of Object.keys(icons)) reg[c] = icons[c];
+      for (const c of Object.keys(icons)) {
+        reg[c] = icons[c];
+        if (!before.has(c) && !c.includes('.')) reg[`${nameKey(node.name)}.${nameKey(c)}`] = icons[c];
+      }
       return { tag: 'struct', name: node.name, names: published };
     }
 

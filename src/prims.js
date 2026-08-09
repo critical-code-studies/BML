@@ -30,6 +30,11 @@ import { RonmlError, RonmlRaise } from './errors.js';
 // nothing to match and the house style was costing the language a feature it
 // claimed to have. It answers both now: `handle Empty` sees an ordinary
 // constructor, and an UNCAUGHT one still prints the sentence.
+// A number as Standard ML writes it: a minus sign is a TILDE. The host spells
+// every one of these with `-`, so nothing it produces can be handed back as it
+// stands. `bigtostring` has done this inline since IntInf landed.
+const smlNum = (s) => String(s).replace(/^-/, '~');
+
 function raiseStd(name, why) {
   throw new RonmlRaise({ tag: 'con', name, args: [], why });
 }
@@ -241,6 +246,44 @@ export const PRIMITIVES = {
   // which is what the tilde in its name says.
   wordshr: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: intOf(a) >>> intOf(b) }) },
   wordashr: { arity: 2, fn: ([a, b]) => ({ tag: 'int', v: (intOf(a) >> intOf(b)) >>> 0 }) },
+
+  // FORMATS. `StringCvt` names them and `fmt` was ignoring the name it was
+  // handed: `Real.fmt (FIX (SOME 2)) 3.14159` answered 3.14159, and every fmt
+  // in the Basis was `fun fmt _ x = toString x`. These do the work the format
+  // asks for; the choosing is in the prelude, where the datatype is.
+  //
+  // Standard ML writes a negative with a TILDE and an exponent with a capital
+  // E, so none of the host's own spellings can be used as they stand.
+  fmtfix: { arity: 2, fn: ([x, n]) => ({ tag: 'str', v: smlNum(x.v.toFixed(intOf(n))) }) },
+  fmtsci: {
+    arity: 2,
+    fn: ([x, n]) => {
+      // toExponential gives `1.23e+4`; Standard ML wants `1.23E4`, and `E~4`
+      // for a negative exponent.
+      const s = x.v.toExponential(intOf(n));
+      return { tag: 'str', v: smlNum(s.replace(/e\+?(-?)(\d+)$/, (_, sign, d) => `E${sign ? '~' : ''}${d}`)) };
+    },
+  },
+  // GEN is the shorter of the two, at n SIGNIFICANT digits rather than n after
+  // the point, which is what `toPrecision` means.
+  fmtgen: {
+    arity: 2,
+    fn: ([x, n]) => {
+      const d = Math.max(1, Math.min(21, intOf(n)));
+      const s = x.v.toPrecision(d).replace(/e\+?(-?)(\d+)$/, (_, sign, dd) => `E${sign ? '~' : ''}${dd}`);
+      // A trailing run of zeros after the point carries no information here.
+      return { tag: 'str', v: smlNum(s.includes('E') ? s : s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')) };
+    },
+  },
+  // A whole number in another base. Standard ML writes hex in CAPITALS.
+  fmtradix: {
+    arity: 2,
+    fn: ([x, base]) => {
+      const b = intOf(base);
+      const v = intOf(x);
+      return { tag: 'str', v: (v < 0 ? `~${(-v).toString(b)}` : v.toString(b)).toUpperCase() };
+    },
+  },
 
   // THE CLOCK. Milliseconds since 1970, from the host or not at all.
   clocknow: {

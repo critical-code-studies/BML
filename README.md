@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.38.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.39.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -30,7 +30,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.38.0, a 2026 Standard ML
+BML 0.39.0, a 2026 Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -206,11 +206,17 @@ this runs in the browser, so there is no OS support as such. `Date` is
 therefore UTC only, and `fromTimeLocal` and `fromTimeUniv` are not able to
 give the OS time.
 
-`Word` arithmetic does not wrap: `0wxFFFFFFFF + 0w1` answers `0w100000000`
-where a 32-bit word gives `0w0`. The bitwise operators do mask correctly, so
-`notb 0w0` is `0wxFFFFFFFF`. And a `Substring` is the string it denotes rather
-than a window onto a base, so `Substring.base` reports an offset of 0 whatever
-the substring was cut from. Both are said here rather than discovered.
+**There is no `word` type.** A word literal is an `int` here — `0w5` has type
+`int` and prints as `5` — so nothing can tell a word from a whole number and
+the overloaded `+` has nothing to dispatch on: `0wxFFFFFFFF + 0w1` answers
+`4294967296` where a 32-bit word gives `0wx0`. What is written against `Word`
+itself does wrap, so `Word.~ 0w1` is `0wxFFFFFFFF` and `notb 0w0` with it, and
+`Word.toString` prints the hex the Basis asks for. `Word.+`, `Word.-` and
+`Word.*` are not there yet.
+
+A `Substring` is likewise the string it denotes rather than a window onto a
+base, so `Substring.base` reports an offset of 0 whatever the substring was cut
+from. Both are said here rather than discovered.
 
 **Non-tail** recursion depth is the host's rather than the interpreter's.
 Measured, a first run manages about **1,200** and about 4,200 once the browser

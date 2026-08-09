@@ -483,6 +483,11 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
           as such.</td></tr>
       <tr><td><code>Date</code> is UTC</td><td><code>fromTimeLocal</code> and
           <code>fromTimeUniv</code> are not able to give the OS time.</td></tr>
+      <tr><td>no <code>word</code> type</td><td>A word literal is an
+          <code>int</code>: <code>0w5</code> has type <code>int</code> and
+          prints as <code>5</code>, so <code>0wxFFFFFFFF + 0w1</code> does not
+          wrap. What is written against <code>Word</code> itself does, so
+          <code>Word.~ 0w1</code> is <code>0wxFFFFFFFF</code>.</td></tr>
     </table>
     <p>The Basis Library is Standard ML's standard library, specified separately
     from the language in 1997.</p>
