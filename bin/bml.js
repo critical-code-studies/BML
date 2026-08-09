@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// BML — a little Standard ML. The read-eval-print loop.
+// BML — a 2026 Standard ML. The read-eval-print loop.
 //
 //   node bin/bml.js              strict: a line that does not typecheck is refused
 //   node bin/bml.js --sloppy     advisory: a clash is named and the line still runs
@@ -161,7 +161,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 
 if (argv.includes('--help') || argv.includes('-h')) {
   console.log([
-    `${BML_NAME} ${BML_VERSION}, a little Standard ML`,
+    `${BML_NAME} ${BML_VERSION}, a 2026 Standard ML`,
     'Created by David M. Berry, University of Sussex, 2026.',
     '',
     '  bml                 strict repl (ill-typed lines are refused)',
@@ -200,13 +200,17 @@ function banner() {
   return [
     '',
     '------------------------------------------------------------',
-    `${BML_NAME} ${BML_VERSION}, a little Standard ML${sloppy ? '  (advisory)' : ''}`,
+    `${BML_NAME} ${BML_VERSION}, a 2026 Standard ML${sloppy ? '  (advisory)' : ''}`,
     'Created by David M. Berry, University of Sussex, 2026.',
     'Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.',
     '',
+    // BOTH LINES DESCRIBE THE MODE. This one read `strict: use typecheck`,
+    // which looks like an instruction to type `typecheck` — and that is not a
+    // command, so it answered `unbound variable: typecheck`. The advisory line
+    // beside it was already a description; they match now.
     sloppy
       ? 'advisory: a clash is named and the line runs anyway.'
-      : 'strict: use typecheck',
+      : 'strict: a line that does not typecheck is refused. --sloppy runs it anyway.',
     'Type help for more info, :quit to leave.',
     '------------------------------------------------------------',
     '',
@@ -217,7 +221,7 @@ function banner() {
 // game the console intercepts it before evaluation, and that interception lives
 // in the game's adapter, so out here `help` was an unbound variable. A REPL that
 // cannot tell you what it takes is not much of a teaching interpreter.
-const HELP = `${BML_NAME} ${BML_VERSION}, a little Standard ML
+const HELP = `${BML_NAME} ${BML_VERSION}, a 2026 Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 
 DECLARATIONS

@@ -138,10 +138,14 @@ test('the prelude is loaded before the first line', () => {
 test('the banner says who made it, where, and which build', () => {
   // A screenshot of a session should carry its own provenance.
   const { out } = bml([':quit']);
-  assert.match(out, /BML \d+\.\d+\.\d+, a little Standard ML/);
+  assert.match(out, /BML \d+\.\d+\.\d+, a 2026 Standard ML/);
   assert.match(out, /David M\. Berry, University of Sussex, 2026/);
   assert.match(out, /Milner, Mads Tofte and Robert Harper/);
-  assert.match(out, /strict: use typecheck/);
+  // The mode is DESCRIBED, not spelled as a command. This read `strict: use
+  // typecheck`, which looks like an instruction and answers `unbound
+  // variable: typecheck` if you follow it.
+  assert.match(out, /strict: a line that does not typecheck is refused/);
+  assert.doesNotMatch(out, /use typecheck/, 'it is not a command');
 });
 
 test('--sloppy says so in the banner rather than leaving you to guess', () => {
