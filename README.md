@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.39.1** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.40.0** · MIT · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -30,7 +30,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.39.1, a 2026 Standard ML
+BML 0.40.0, a 2026 Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 
@@ -163,6 +163,12 @@ bml --version       which build this is, and whether a newer one exists
 At the prompt: `help` lists the forms, `:t <expr>` gives a type without
 evaluating, `use "file.ml";` reads a file in, `:quit` leaves.
 
+**Tab completes.** A bare prefix offers every name in scope and the keywords;
+after a dot it offers that structure's members, so `List.f` gives `List.filter`,
+`List.find`, `List.foldl`, `List.foldr`. It fills in as far as the candidates
+agree and lists them only when they diverge. The same rule runs at the prompt in
+the browser, because it is one function in the language rather than one in each.
+
 As a library:
 
 ```js
@@ -209,10 +215,18 @@ give the OS time.
 **There is no `word` type.** A word literal is an `int` here — `0w5` has type
 `int` and prints as `5` — so nothing can tell a word from a whole number and
 the overloaded `+` has nothing to dispatch on: `0wxFFFFFFFF + 0w1` answers
-`4294967296` where a 32-bit word gives `0wx0`. What is written against `Word`
-itself does wrap, so `Word.~ 0w1` is `0wxFFFFFFFF` and `notb 0w0` with it, and
-`Word.toString` prints the hex the Basis asks for. `Word.+`, `Word.-` and
-`Word.*` are not there yet.
+`4294967296` where a 32-bit word gives `0wx0`.
+
+What is written against `Word` itself does wrap, and that is now the whole
+structure rather than part of it. `Word.+ (0wxFFFFFFFF, 0w1)` is `0wx0`,
+`Word.- (0w0, 0w1)` is `0wxFFFFFFFF`, `Word.~ 0w1` is `0wxFFFFFFFF`, `Word8`
+does the same at eight bits, and `Word.toString` prints the hex the Basis asks
+for. So wrapping is expressible; it is the bare infix that is not.
+
+The type itself is a decision rather than an omission. It would be a new value
+tag through the lexer, the parser, the evaluator, the printer, equality, the
+checker's base types, the primitives and the Basis, for a feature no program in
+the corpus uses — Harper's files contain no words at all.
 
 A `Substring` is likewise the string it denotes rather than a window onto a
 base, so `Substring.base` reports an offset of 0 whatever the substring was cut

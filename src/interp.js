@@ -479,5 +479,9 @@ export function createInterpreter(opts = {}) {
     }
   }
 
-  return { run, typeReport, loadPrelude, smlEcho, session, typecheck, env: envTip };
+  // `knownNames` and `membersOf` are handed out because Tab completion needs
+  // exactly what the "did you mean `Date`?" diagnostics needed, and there is no
+  // reason for a host to rebuild it. `membersOf` keeps its default limit of 3
+  // for the diagnostics; completion asks for Infinity.
+  return { run, typeReport, loadPrelude, smlEcho, session, typecheck, env: envTip, knownNames, membersOf };
 }

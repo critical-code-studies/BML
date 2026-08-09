@@ -1951,10 +1951,7 @@ test('the Basis: every fmt obeys the format it is handed', () => {
 
 test('Word.~ wraps round zero', () => {
   // A word has no sign, so its negation is what wrapping gives. It was unbound
-  // in both structures. `+`, `-` and `*` are still missing and cannot be
-  // written yet: their bodies would need the operator being defined, which
-  // wants a `local` — and a `local` after any other declaration inside a
-  // `struct` is refused. See the register.
+  // in both structures.
   const bml = createInterpreter({ typecheck: 'off' });
   bml.loadPrelude();
   assert.equal(bml.run('Word.~ 0w1').text, '4294967295');
@@ -2379,4 +2376,52 @@ test('List, Array and Vector keep their own members', () => {
   }
   assert.equal(bml.run('Array.sub (Array.fromList [7,8], 1)').text, '8');
   assert.equal(bml.run('Vector.sub (#[7,8], 1)').text, '8');
+});
+
+
+// WORD ARITHMETIC WRAPS (task #82).
+//
+// `Word.+`, `Word.-` and `Word.*` could not be written before v1.345: their
+// bodies need the operator being defined, which meant either a `local` after
+// another declaration in a struct body (#83, refused, and it killed the whole
+// structure in silence) or `val (op +) = …` (#84, did not parse). Both are
+// fixed, so these three are expressible, and they are written with `val` for
+// the reason that makes `val` the right word — its right-hand side runs in the
+// environment as it stands, so the `+` inside is the ordinary one.
+//
+// This is NOT the word type. `0wxFFFFFFFF + 0w1` bare is still int arithmetic,
+// because a word literal lexes to an int and nothing downstream can tell them
+// apart. See docs/word-type-plan.md for why that is being left alone and said
+// out loud rather than built.
+test('Word.+ - and * wrap at the word size', () => {
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('Word.+ (0wxFFFFFFFF, 0w1)').text, '0', 'round the top');
+  assert.equal(bml.run('Word.- (0w0, 0w1)').text, '4294967295', 'and round the bottom');
+  assert.equal(bml.run('Word.* (0w65536, 0w65536)').text, '0', '2^32 is zero in 32 bits');
+  assert.equal(bml.run('Word.toString (Word.+ (0wxFFFFFFFF, 0w1))').text, '"0"');
+  // Eight bits for Word8, by the same idiom.
+  assert.equal(bml.run('Word8.+ (0w255, 0w1)').text, '0');
+  assert.equal(bml.run('Word8.- (0w0, 0w1)').text, '255');
+  assert.equal(bml.run('Word8.* (0w16, 0w16)').text, '0');
+});
+
+test('the operator inside Word.+ is the ordinary one, not itself', () => {
+  // The whole reason for `val` over `fun`. Written with `fun` these would
+  // recurse until the step budget stopped them, and the structure would be
+  // useless in a way that only shows up on the first call.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('Word.+ (0w1, 0w2)').text, '3');
+  assert.equal(bml.run('Word.* (0w6, 0w7)').text, '42');
+  assert.equal(bml.run('Word8.+ (0w1, 0w2)').text, '3');
+});
+
+test('rebinding + inside a structure leaves + alone outside it', () => {
+  // The Basis defines Word.+ by shadowing. If that reached the top level, every
+  // program after the prelude loaded would be doing 32-bit arithmetic.
+  const bml = createInterpreter({ typecheck: 'off' });
+  bml.loadPrelude();
+  assert.equal(bml.run('1 + 2').text, '3');
+  assert.equal(bml.run('4294967295 + 1').text, '4294967296', 'int does not wrap');
 });

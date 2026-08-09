@@ -23,7 +23,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   createInterpreter, smlEcho, joinProgram, needsMoreInput, continuesPrevious,
-  BML_NAME, BML_VERSION, BML_CREDIT,
+  readlineCompleter, BML_NAME, BML_VERSION, BML_CREDIT,
 } from '../src/index.js';
 
 // A closed pipe is not an error. `bml | head -1` shuts stdout while readline is
@@ -318,7 +318,21 @@ if (newer) {
   console.log('');
 }
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '- ' });
+// TAB COMPLETES. The rule is in the language (src/lang/complete.js) so that the
+// page's prompt and this one cannot drift apart, and so it can be tested
+// without a terminal.
+//
+// Against the CURRENT PHYSICAL LINE, not the held continuation text: mid
+// declaration the buffer holds `fun fact 0 = 1` from the line before, and
+// completing against that would offer names for a word the reader is not
+// typing and replace the wrong span. readline hands us the line it is editing,
+// which is the right one.
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  prompt: '- ',
+  completer: (line) => readlineCompleter(line, bml),
+});
 rl.prompt();
 
 // A DECLARATION MAY RUN OVER TWO LINES, and until 0.38.0 this loop took one

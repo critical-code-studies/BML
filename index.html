@@ -486,8 +486,11 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
       <tr><td>no <code>word</code> type</td><td>A word literal is an
           <code>int</code>: <code>0w5</code> has type <code>int</code> and
           prints as <code>5</code>, so <code>0wxFFFFFFFF + 0w1</code> does not
-          wrap. What is written against <code>Word</code> itself does, so
-          <code>Word.~ 0w1</code> is <code>0wxFFFFFFFF</code>.</td></tr>
+          wrap. Everything written against <code>Word</code> itself does:
+          <code>Word.+ (0wxFFFFFFFF, 0w1)</code> is <code>0wx0</code>,
+          <code>Word.~ 0w1</code> is <code>0wxFFFFFFFF</code>, and
+          <code>Word8</code> the same at eight bits. It is the bare infix that
+          needs the type.</td></tr>
     </table>
     <p>The Basis Library is Standard ML's standard library, specified separately
     from the language in 1997.</p>
@@ -575,7 +578,7 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
 </dialog>
 
 <script type="module">
-import { createInterpreter, smlEcho, joinProgram, BML_NAME, BML_VERSION }
+import { createInterpreter, smlEcho, joinProgram, complete, commonPrefix, BML_NAME, BML_VERSION }
   from './src/index.js';
 
 const screenEl = document.getElementById('screen');
@@ -802,6 +805,28 @@ input.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     hIdx = Math.min(history.length, hIdx + 1);
     input.value = hIdx === history.length ? '' : history[hIdx];
+  } else if (ev.key === 'Tab') {
+    // TAB COMPLETES, and must not move focus — a prompt that jumps to the next
+    // control when you ask it what a name is called is a prompt you stop
+    // asking. The rule is the language's (src/complete.js), the same one the
+    // CLI's readline uses, so the two cannot drift.
+    ev.preventDefault();
+    const caret = input.selectionStart ?? input.value.length;
+    const r = complete(input.value, caret, bml);
+    if (!r.candidates.length) return;
+    const shared = commonPrefix(r.candidates);
+    // Fill in as far as every candidate agrees; only then show the list. One
+    // answer completes and says nothing, which is what you want when you knew
+    // the name and were saving keystrokes.
+    if (shared.length > r.word.length) {
+      const before = input.value.slice(0, r.from);
+      const after = input.value.slice(r.to);
+      input.value = before + shared + after;
+      const pos = before.length + shared.length;
+      input.setSelectionRange(pos, pos);
+      if (r.candidates.length === 1) return;
+    }
+    write(r.candidates.join('   '), 'p');
   } else if (ev.key === 'l' && (ev.ctrlKey || ev.metaKey)) {
     ev.preventDefault();
     clearScreen();

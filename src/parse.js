@@ -45,6 +45,27 @@ export const BLOCK_ENDERS = ['with', 'end', 'in', 'and'];
 const STOPS = [...DECL_KEYWORDS, ...BLOCK_ENDERS];
 const isStop = (t) => t && t.t === 'IDENT' && STOPS.includes(nameKey(t.v));
 
+// WHAT CANNOT BEGIN AN ATOM, and therefore ends an argument list. Juxtaposition
+// binds tighter than anything, so a word here that is not listed gets eaten as
+// an argument to whatever came before it.
+//
+// Built from STOPS rather than typed out again. It WAS typed out again, and it
+// went stale exactly where you would expect: `local` was missing, so
+// `val hi = 1 local val x = 2 in val y = x end` read `local` as an argument
+// applied to 1 and died complaining about a `let` nobody wrote. `abstype`,
+// `functor`, `withtype`, `infix`, `infixr`, `nonfix` and `with` were missing
+// with it. A declaration keyword can never start an atom, so the one list that
+// already knows them all is the one to ask.
+//
+// The rest are the expression keywords, which are not declarations and so are
+// not in STOPS. `mod` and `div` are also caught by the fixity check in
+// parseApp; they are named here too because that check is about operators and
+// this one is about words.
+const NOT_AN_ATOM = new Set([...STOPS,
+  'let', 'if', 'then', 'else', 'fn', 'or', 'andalso', 'orelse', 'mod', 'div',
+  'case', 'of', 'as', 'do', 'while', 'sig', 'struct', 'raise', 'handle',
+]);
+
 function isKeyword(tok, word) {
   // `val` is Standard ML's word for a value binding. Accepted as a synonym for
   // `let` so that a line copied out of a manual binds rather than complains.
@@ -306,7 +327,25 @@ export function parse(toks, fixityIn) {
   // Standard ML reads the left-hand side as a pattern and takes the operator
   // out of it. Returns the name and the parameters that were around it, or null
   // if this is not one of those shapes — in which case nothing is consumed.
-  function infixLhs() {
+  // `opOnly` restricts it to the `(op +)` shape. `val` wants that one and must
+  // not have the other: `(f ** g)` is a function being DEFINED with an infix
+  // name, which `val` does not do, and `val (a, b) = e` is a tuple pattern that
+  // must keep working.
+  function infixLhs(opOnly = false) {
+    // `val op + = e`, without the parentheses. Standard ML's ordinary way to
+    // rebind an operator, and the reason `val` needs this at all: `val`
+    // evaluates its right-hand side BEFORE the binding takes effect, so the old
+    // operator is still there to build the new one out of, where `fun` would
+    // see itself and recurse.
+    if (opOnly && peek().t === 'IDENT' && nameKey(peek().v) === 'op') {
+      const save0 = p;
+      p++;
+      const t0 = toks[p++];
+      const sym0 = OP_SYM[t0.t] || (t0.t === 'STAR' ? '*' : null) || (t0.t === 'IDENT' ? t0.v : null);
+      if (sym0 && peek().t === 'EQ') return { name: sym0, params: [] };
+      p = save0;
+      return null;
+    }
     if (peek().t !== 'LP') return null;
     const save = p;
     p++;
@@ -473,9 +512,17 @@ export function parse(toks, fixityIn) {
       };
       // `fun (f ** g) (x, y) = …` and `fun (op +) (a, b) = …`. Tried before the
       // pattern branch below, which sees the `(` and reads the whole left-hand
-      // side as something to bind. Never for `val`, which really does take a
-      // pattern there.
-      const infLhs = saidVal ? null : infixLhs();
+      // side as something to bind.
+      //
+      // `val` gets the `op` shapes ONLY — `val op + = e` and `val (op +) = e` —
+      // never `(f ** g)`, which is a function being defined, and never anything
+      // that would eat `val (a, b) = e`, which is a tuple pattern. It needs them
+      // because `val` is how Standard ML SHADOWS an operator: the right-hand
+      // side runs in the environment as it stands, so the old `+` is still
+      // there to build the new one out of, where `fun` would see itself and
+      // recurse. BOTH call sites, because there are two paths through a binding
+      // here and fixing one has left the other broken twice before.
+      const infLhs = infixLhs(saidVal);
       if (!infLhs && (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern())) {
         const pat = valTakesPattern() ? parsePattern() : parsePatternAtom();
         eat('EQ');
@@ -852,8 +899,7 @@ export function parse(toks, fixityIn) {
     // Keywords delimit rather than begin an atom, so a bare `if`/`then`/`else`/`fn`
     // in application position ends the current argument list instead of being eaten
     // as a variable named "then".
-    if (tok.t === 'IDENT' && ['in', 'let', 'if', 'then', 'else', 'fn', 'and', 'or', 'andalso', 'orelse', 'mod', 'div', 'case', 'of', 'datatype', 'val', 'fun', 'as', 'end', 'do', 'while', 'open',
-      'structure', 'signature', 'sig', 'struct', 'exception', 'raise', 'handle', 'type'].includes(nameKey(tok.v))) return false;
+    if (tok.t === 'IDENT' && NOT_AN_ATOM.has(nameKey(tok.v))) return false;
     return ['NUM', 'STR', 'CHAR', 'NEG', 'IDENT', 'LP', 'LB', 'LC', 'HASH'].includes(tok.t);
   }
 
@@ -1549,9 +1595,17 @@ export function parse(toks, fixityIn) {
       };
       // `fun (f ** g) (x, y) = …` and `fun (op +) (a, b) = …`. Tried before the
       // pattern branch below, which sees the `(` and reads the whole left-hand
-      // side as something to bind. Never for `val`, which really does take a
-      // pattern there.
-      const infLhs = saidVal ? null : infixLhs();
+      // side as something to bind.
+      //
+      // `val` gets the `op` shapes ONLY — `val op + = e` and `val (op +) = e` —
+      // never `(f ** g)`, which is a function being defined, and never anything
+      // that would eat `val (a, b) = e`, which is a tuple pattern. It needs them
+      // because `val` is how Standard ML SHADOWS an operator: the right-hand
+      // side runs in the environment as it stands, so the old `+` is still
+      // there to build the new one out of, where `fun` would see itself and
+      // recurse. BOTH call sites, because there are two paths through a binding
+      // here and fixing one has left the other broken twice before.
+      const infLhs = infixLhs(saidVal);
       if (!infLhs && (peek().t === 'LP' || peek().t === 'LB' || peek().t === 'LC' || valTakesPattern())) {
         const pat = valTakesPattern() ? parsePattern() : parsePatternAtom();
         eat('EQ');

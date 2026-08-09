@@ -17,6 +17,7 @@ export { formatValue, showReal, describeValue, setHostValues, CONSOLE_FUEL } fro
 export { typeOf, remember } from './types.js';
 export { diagnose, NOT_FITTED_SAMPLES } from './diag.js';
 export { PRELUDE } from './basis.js';
+export { complete, readlineCompleter, commonPrefix, COMPLETION_KEYWORDS } from './complete.js';
 
 export const BML_NAME = 'BML';
 
@@ -27,7 +28,7 @@ export const BML_NAME = 'BML';
 // `value`, then gained `printing`, then `primitives`), so 2.7 would have
 // claimed two major versions of a settled interface that has never existed.
 // The language's own lineage belongs in the history and the README, not here.
-export const BML_VERSION = '0.39.1';
+export const BML_VERSION = '0.40.0';
 
 export const BML_CREDIT = [
   'BML created by David M. Berry, 2026.',
