@@ -10,7 +10,7 @@
 // THE PARSER. Tokens to an abstract syntax tree.
 //
 // Part of src/lang/, the language proper: nothing here knows about NostOS, its
-// terminals, or its robots. See docs/aiml-standalone-plan.md.
+// terminals, or its robots. See docs/PLAN.md.
 //
 // Moved out of src/game/ai_ml.js unchanged at v1.286 (M1), together with the
 // fixity table it carries, parseLine, and the program joiner. The only edits

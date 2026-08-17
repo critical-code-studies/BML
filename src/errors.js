@@ -12,7 +12,7 @@
 //
 // These live in their own file rather than in lex.js because all three layers
 // throw them and none of the three should have to import another just to say
-// what went wrong. (The plan's file list in docs/aiml-standalone-plan.md does
+// what went wrong. (The plan's file list in docs/PLAN.md does
 // not name this file; it is the one addition M1 makes to that list.)
 
 // Anything the language refuses, at any stage. The message is the one a player
@@ -28,4 +28,16 @@ export class RonmlFuelError extends RonmlError {}
 // as one, but on the way up it is a value being carried, not a failure.
 export class RonmlRaise extends Error {
   constructor(value) { super('uncaught exception'); this.value = value; }
+}
+
+// The program asked to read a line and there is none queued. Not a failure:
+// the run is SUSPENDED, and whether it can resume is the host's business. A
+// console with somebody sitting at it collects a line, puts it on the queue and
+// runs the program again from the top; a headless host that has already handed
+// over everything it has treats this as end of input.
+//
+// It is not a RonmlError, for the same reason RonmlRaise is not: on the way up
+// it is a request, and only the outermost caller decides whether it is a fault.
+export class RonmlNeedInput extends Error {
+  constructor() { super('waiting for input'); }
 }

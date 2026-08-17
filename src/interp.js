@@ -10,7 +10,7 @@
 // THE INTERPRETER. The one entry point, and the thing a host holds.
 //
 // Part of src/lang/. Written at v1.288 (M3) out of what was `runRonml` in
-// src/game/ai_ml.js. See docs/aiml-standalone-plan.md §4.
+// src/game/ai_ml.js. See docs/PLAN.md §4.
 //
 // WHAT THIS FILE IS FOR. Before it, the entry point mixed two jobs: reading and
 // running a line of ML, and being NostOS's console (intercepting `help`, picking
@@ -24,11 +24,11 @@
 // host policy, it never reads host tables. Every hook below is a question the
 // language asks and the host answers. None of them lets the host reach in.
 
-import { RonmlError, RonmlRaise } from './errors.js';
+import { RonmlError, RonmlRaise, RonmlNeedInput } from './errors.js';
 import { nameKey, setNameFold } from './names.js';
 import { tokenize } from './lex.js';
 import { parse, joinProgramLines } from './parse.js';
-import { evalNode, formatValue, combineOutput, beginRun, setOut } from './eval.js';
+import { evalNode, formatValue, combineOutput, beginRun, setOut, setIn, inRead } from './eval.js';
 import { typeOf, remember } from './types.js';
 import { diagnose, suggestName } from './diag.js';
 import { PRELUDE, PRELUDE_EXACT } from './basis.js';
@@ -203,7 +203,20 @@ export function createInterpreter(opts = {}) {
   // expected to source the definitions from prims.js rather than write its own,
   // and the adapter does.
   const usePrims = opts.primitives !== false;
-  const builtinsFor = (hostCtx) => (usePrims
+  // A host that folds case looks a name up as `nameKey(name)`, so a builtin
+  // whose key has a capital in it can never be found: `readLine` is looked up
+  // as `readline` and misses. Fold the TABLE the same way the lookup does.
+  //
+  // This bit NostOS, which folds because its terminal has always taken `IF` as
+  // `if`. BML does not fold, so the same primitive worked perfectly at the CLI
+  // and was invisible in the game — the two disagreed about what a name is.
+  const foldKeys = (tbl) => {
+    if (nameKey('A') === 'A') return tbl;      // not folding: leave it alone
+    const out = {};
+    for (const k of Object.keys(tbl)) out[nameKey(k)] = tbl[k];
+    return out;
+  };
+  const builtinsFor = (hostCtx) => foldKeys(usePrims
     ? { ...PRIMITIVES, ...hostBuiltins(hostCtx) }
     : hostBuiltins(hostCtx));
   // opts.printing: 'sml' quotes strings and characters in the ANSWER, as
@@ -367,6 +380,10 @@ export function createInterpreter(opts = {}) {
     // the reader's own wall clock. NostOS hands its terminals the RUIN's time;
     // the BML page and REPL hand over the real one.
     const ctx = { clock: opts.clock, ...(hostCtx || {}), session };
+    // Declared out here rather than inside the try: a run that suspends wanting
+    // input has usually printed the question first, and the catch has to be able
+    // to hand that back or the prompt arrives with nothing in front of it.
+    const out = [];
     try {
       // STRICT MODE. In Standard ML a program that does not typecheck does not
       // run — that is the whole point of the type system, and until this existed
@@ -424,10 +441,19 @@ export function createInterpreter(opts = {}) {
       const rebound = topLevelNames(ast).filter((n) => n in envTip());
       if (rebound.length) session.__env = Object.create(envTip());
 
-      const out = [];
       setOut(out);
+      // The input queue the host has supplied, resumed at the point the last
+      // line left it. The POSITION belongs to the host, not to this module: a
+      // file is run a declaration at a time, and a cursor reset per line would
+      // hand line three the same answer it gave line one.
+      setIn(hostCtx && hostCtx.stdin, hostCtx && hostCtx.stdinPos);
       beginRun(hostCtx && hostCtx.fuel);
       const result = evalNode(ast, envTip(), ctx, builtins);
+      // Record what was consumed, so the next line carries on where this one
+      // stopped. Only on the way out through success: a run that suspended
+      // wanting input is going to be replayed from the top, and the host resets
+      // the cursor itself when it does that.
+      if (hostCtx) hostCtx.stdinPos = inRead();
       if (result && result.tag === 'fn') {
         const hint = hooks.needsMoreArgs && hooks.needsMoreArgs(result, hostCtx);
         return { ok: false, text: `ERR: ${hint || `${result.name} needs more arguments`}` };
@@ -439,6 +465,15 @@ export function createInterpreter(opts = {}) {
       // can have a separate call that says so.
       return { ok: true, text: combineOutput(out, result, sml) };
     } catch (e) {
+      // A run that asked for a line it has not been given is SUSPENDED, not
+      // broken, and the difference is the whole feature: a console with a
+      // person at it collects a line and runs the program again, and only a
+      // host that has nothing left to give calls this a failure. Report it as
+      // its own outcome so the caller can tell which it is without matching on
+      // the text of a message.
+      if (e instanceof RonmlNeedInput) {
+        return { ok: false, needInput: true, out, text: 'ERR: waiting for input' };
+      }
       if (e instanceof RonmlRaise) {
         // An uncaught standard exception still says what went wrong. `Empty` on
         // its own is correct and useless to somebody learning; the sentence is

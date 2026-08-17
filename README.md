@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.40.0** · GPL-3.0-or-later · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.42.0** · GPL-3.0-or-later · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -69,6 +69,31 @@ float. `IntInf` is unbounded. Reals overflow to `inf`, as Standard ML's do.
 Tail calls are proper, as the Definition requires, so an accumulator loop or a
 continuation-passing program runs to whatever depth the step budget allows
 rather than to whatever the host stack has left.
+
+Files are read and written through `TextIO`, as the Basis has it: `openIn`,
+`inputAll`, `inputLine`, `closeIn`, and `openOut`, `openAppend`, `output`,
+`output1`, `flushOut`, `closeOut`. A program written from the Basis runs here
+unchanged, so the library exercise that everyone is set in their first week
+works as it is written:
+
+```sml
+fun shelve title =
+  let val g = TextIO.openAppend "library.txt"
+  in TextIO.output (g, title ^ "\n"); TextIO.closeOut g end
+
+val _ = shelve "Giant Brains"
+val _ = shelve "Ficciones"
+val shelf = TextIO.inputAll (TextIO.openIn "library.txt")
+```
+
+`openAppend` makes the file if it is not there, as the Basis says, so nothing
+has to be created first.
+
+The disk comes from the host. At the command line that is the real filesystem,
+relative to where you ran `bml`. In the browser there is none, and a program
+that opens a file is told so rather than being handed an empty string. A stream
+is its filename here, so `closeIn` and `closeOut` hold nothing open and are
+no-ops; a Basis program still has to call them, and calling them is still right.
 
 Types are inferred by Hindley-Milner with the occurs check, let-polymorphism and
 the value restriction, with exhaustiveness warnings on `case`. The Basis Library

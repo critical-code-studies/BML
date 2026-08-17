@@ -480,7 +480,10 @@ repository</a>, and <code>node bin/bml.js</code> gives the same prompt at a term
           browser has compiled the evaluator, so a recursion deeper than that
           stops rather than finishing. Tail calls are not bounded.</td></tr>
       <tr><td>no <code>OS</code></td><td>Runs in the browser, so no OS support
-          as such.</td></tr>
+          as such. <code>TextIO</code> reads and writes files wherever the host
+          gives it a disk, which at the command line is the real filesystem; on
+          this page there is none, and opening a file says so rather than
+          answering with an empty string.</td></tr>
       <tr><td><code>Date</code> is UTC</td><td><code>fromTimeLocal</code> and
           <code>fromTimeUniv</code> are not able to give the OS time.</td></tr>
       <tr><td>no <code>word</code> type</td><td>A word literal is an

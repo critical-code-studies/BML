@@ -10,7 +10,7 @@
 // THE EVALUATOR. An abstract syntax tree to a value.
 //
 // Part of src/lang/, the language proper. Moved out of src/game/ai_ml.js at
-// v1.287 (M2). See docs/aiml-standalone-plan.md.
+// v1.287 (M2). See docs/PLAN.md.
 //
 // WHY THE STATE IS MODULE-LEVEL, and why it moved here rather than being
 // re-plumbed. FUEL and STEPS are module-level for the same reason the print
@@ -21,12 +21,12 @@
 // parameters would mean touching every one of evalNode's recursive calls, which
 // is a larger change than this stage is allowed to make.
 
-import { RonmlError, RonmlFuelError, RonmlRaise } from './errors.js';
+import { RonmlError, RonmlFuelError, RonmlRaise, RonmlNeedInput } from './errors.js';
 import { nameKey } from './names.js';
 import { parse } from './parse.js';
 import { defaultFixity } from './parse.js';
 
-// FUEL (docs/robot-programs-plan.md §3). A program carried by a machine must not
+// FUEL (docs/PLAN.md §3). A program carried by a machine must not
 // be able to hang the game: `let f x = f x` has to stop somewhere. Evaluation
 // counts reductions and aborts past a budget. At a console the budget is huge
 // (a human is waiting, and a wrong line should still finish); for a machine's
@@ -53,6 +53,84 @@ export function beginRun(fuel) {
 let OUT = null;
 export function setOut(buf) { OUT = buf; }
 export function pushOut(text) { if (OUT) OUT.push(text); }
+
+// The current run's input queue, and how far through it we have read. The
+// mirror image of OUT: the host installs the lines it has before the run, and
+// `readLine` takes them in order. Module-level for the same reason OUT is —
+// a closure defined on one line and called on another must read from the same
+// queue, not from the ctx it happened to be born in.
+//
+// Running off the end throws RonmlNeedInput rather than returning "". A program
+// that reads a line it has not been given has not finished; saying so lets a
+// console suspend it and ask, and lets a headless run report end of input.
+let IN = null;
+let IN_POS = 0;
+export function setIn(lines, pos) {
+  IN = Array.isArray(lines) ? lines : null;
+  IN_POS = Number.isInteger(pos) ? pos : 0;
+}
+export function takeIn() {
+  if (!IN || IN_POS >= IN.length) throw new RonmlNeedInput();
+  return IN[IN_POS++];
+}
+// ---- Reading a file ------------------------------------------------------
+//
+// Same shape as the stdin hook above: a slot the host fills before a run, and a
+// reader the primitive calls. The HOST decides what a filename means, which is
+// the whole point of doing it this way. At the command line it is a real path
+// on a real disk; on the NostBook it is a path in that machine's own tree; on a
+// robot there is no disk at all, so the hook is never installed and the verb is
+// not in its vocabulary.
+//
+// Why this exists: a program that can only be handed text ONE LINE AT A TIME
+// has to remember its place between lines, and every cipher in this game is
+// position-dependent. That bookkeeping is real work, it is easy to get wrong,
+// and it was got wrong. Handing a program the whole file removes the problem
+// rather than documenting it.
+let READ_FILE = null;
+export function setReadFile(fn) { READ_FILE = typeof fn === 'function' ? fn : null; }
+export function readFileHost(name) {
+  if (!READ_FILE) throw new RonmlError('no disk on this machine.');
+  const text = READ_FILE(String(name));
+  if (text == null) throw new RonmlError(`${name}: no such file`);
+  return String(text);
+}
+
+// ASKING WHETHER A FILE IS THERE, without the asking being a failure. It reuses
+// the reader rather than taking a hook of its own, because a host that can read
+// can answer this, and one that cannot has no files to be asked about.
+//
+// It exists for `TextIO.openAppend`, which must create the file when it is
+// missing, as the Basis says. Without it, appending to a file that was not
+// there yet failed: `output` reads before it writes, and the read threw. A
+// missing-file error is not an ML exception and `handle` cannot catch it, so
+// there was no way to write the standard idiom in the language itself — the
+// library exercise in BML's own README could not run as printed.
+export function fileExistsHost(name) {
+  if (!READ_FILE) return false;
+  return READ_FILE(String(name)) != null;
+}
+
+// Writing is the other half, and the half that makes this a language you can
+// keep something in. A first exercise in ML is a library: books in, books out,
+// and the list still there tomorrow. Without a way to put the list down, every
+// program is a calculation that forgets itself.
+//
+// Same shape as the reader. The host decides what a name means and whether the
+// machine has anywhere to put it; a unit in the field has no disk, is never
+// given the hook, and does not have the verb either.
+let WRITE_FILE = null;
+export function setWriteFile(fn) { WRITE_FILE = typeof fn === 'function' ? fn : null; }
+export function writeFileHost(name, text) {
+  if (!WRITE_FILE) throw new RonmlError('no disk on this machine.');
+  const ok = WRITE_FILE(String(name), String(text));
+  if (ok === false) throw new RonmlError(`${name}: cannot write`);
+  return text;
+}
+
+/** How many lines this run has consumed. A host replaying a program uses this
+ *  to know the queue was actually read rather than ignored. */
+export function inRead() { return IN_POS; }
 
 // What the HOST wants said about a name the language does not know. The
 // language has no verbs; NostOS does, and wants "that is a HERMES command, not
@@ -264,7 +342,7 @@ function applyBinOp(op, l, r) {
 // what it computes. Out here they cost one frame when a structure is declared
 // and nothing at all thereafter.
 //
-// Measured in docs/deep-recursion-plan.md.
+// Measured in docs/archive/deep-recursion-plan.md.
 function evalDecl(node, env, ctx, builtins) {
   switch (node.type) {
     // An exception is a constructor that can be raised. Declaring one puts it
@@ -619,7 +697,7 @@ function evalDecl(node, env, ctx, builtins) {
 }
 
 // The evaluator.
-// PROPER TAIL CALLS (docs/tail-calls-plan.md). Standard ML requires them, and
+// PROPER TAIL CALLS (docs/archive/tail-calls-plan.md). Standard ML requires them, and
 // this evaluator did not have them: every sub-expression recursed, so how deep a
 // program could go was whatever the host stack had left. `count 5000` faulted at
 // about 1950, and the same program passed alone and failed inside a full test

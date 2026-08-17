@@ -47,7 +47,7 @@ const smlNum = (s) => String(s).replace(/^-/, '~');
 function raiseStd(name, why) {
   throw new RonmlRaise({ tag: 'con', name, args: [], why });
 }
-import { describeValue, formatValue, pushOut } from './eval.js';
+import { describeValue, formatValue, pushOut, takeIn, readFileHost, writeFileHost, fileExistsHost } from './eval.js';
 
 const numericTag = (x) => !!x && (x.tag === 'int' || x.tag === 'real');
 /** The BigInt out of an arbitrary-precision value. */
@@ -86,6 +86,54 @@ export const PRIMITIVES = {
     fn: ([x]) => {
       pushOut(formatValue(x));
       return { tag: 'unit' };
+    },
+  },
+  // The other half of echo. `readLine ()` takes the next line the host has
+  // queued; if there is none, the run suspends (RonmlNeedInput) rather than
+  // returning an empty string, so a console can go and ask for one.
+  //
+  // The trailing newline is NOT included, unlike TextIO.inputLine in Standard
+  // ML. A host here hands over lines, not a byte stream, and a program that had
+  // to strip \n from every read would be paying for a file abstraction that
+  // has nothing behind it. TextIO.inputLine in the Basis puts the newline back
+  // and wraps the result in an option, which is what a Standard ML program
+  // expects to see.
+  readLine: {
+    arity: 1,
+    fn: () => ({ tag: 'str', v: takeIn() }),
+  },
+  // `readFile "note.asc"` — the whole thing, newlines and all, as one string.
+  // Deliberately not an option type and not a line iterator: the programs that
+  // want this want the complete text, and anything that hands it over in pieces
+  // pushes the position bookkeeping back onto the caller.
+  // `writeFile "shelf.txt" text` — the whole file, replaced. Not an append and
+  // not a handle: a handle would need closing, and a program that forgets to
+  // close one loses the data it was written to keep.
+  writeFile: {
+    arity: 2,
+    fn: ([f, body]) => {
+      const name = f && (f.v != null ? f.v : f.name != null ? f.name : f.id);
+      const text = body && (body.v != null ? body.v : '');
+      writeFileHost(name, text);
+      return { tag: 'unit' };
+    },
+  },
+  readFile: {
+    arity: 1,
+    fn: ([f]) => {
+      const name = f && (f.v != null ? f.v : f.name != null ? f.name : f.id);
+      return { tag: 'str', v: readFileHost(name) };
+    },
+  },
+  // Asking is not reading, and asking about a file that is not there is not an
+  // error. `TextIO.openAppend` needs this: the Basis creates the file when it
+  // is missing, and without a way to ask, appending to a new file failed on the
+  // read that `output` does before it writes.
+  fileExists: {
+    arity: 1,
+    fn: ([f]) => {
+      const name = f && (f.v != null ? f.v : f.name != null ? f.name : f.id);
+      return { tag: 'bool', v: fileExistsHost(name) };
     },
   },
   hd: {

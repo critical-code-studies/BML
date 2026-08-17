@@ -10,7 +10,7 @@
 // THE LEXER. Source text to a flat list of tokens.
 //
 // Part of src/lang/, the language proper: nothing here knows about NostOS, its
-// terminals, or its robots. See docs/aiml-standalone-plan.md.
+// terminals, or its robots. See docs/PLAN.md.
 //
 // Moved out of src/game/ai_ml.js unchanged at v1.286 (M1). The only edits were
 // the import below and the export keyword on tokenize.

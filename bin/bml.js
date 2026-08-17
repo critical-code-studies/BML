@@ -32,8 +32,20 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   createInterpreter, smlEcho, joinProgram, needsMoreInput, continuesPrevious,
-  readlineCompleter, BML_NAME, BML_VERSION, BML_CREDIT,
+  readlineCompleter, setReadFile, setWriteFile, BML_NAME, BML_VERSION, BML_CREDIT,
 } from '../src/index.js';
+
+// `readFile` at the command line means what it says: a path, on this disk,
+// relative to wherever you are standing. BML is a language on a real machine
+// and there is nothing to pretend about. The game installs a different hook
+// that resolves against the NostBook's own tree, which is the whole reason the
+// primitive asks the host rather than reaching for a filesystem itself.
+setReadFile((name) => {
+  try { return fs.readFileSync(name, 'utf8'); } catch { return null; }
+});
+setWriteFile((name, text) => {
+  try { fs.writeFileSync(name, text, 'utf8'); return true; } catch { return false; }
+});
 
 // A closed pipe is not an error. `bml | head -1` shuts stdout while readline is
 // still writing a prompt into it, and node turns that into an unhandled EPIPE
@@ -294,7 +306,7 @@ function step(src) {
   if (use) return runFile(use[1]);
 
   const ty = bml.typeReport(line);
-  const r = bml.run(line, { fuel: REPL_FUEL });
+  const r = bml.run(line, CTX);
   if (!r.ok) { console.log(r.text); return false; }
   for (const out of smlEcho(r.text, ty)) console.log(out);
   return true;
@@ -312,6 +324,31 @@ function runFile(path) {
   }
   return true;
 }
+
+// Whatever is on standard input, split into lines, ready for `readLine`.
+// Only when stdin is a pipe or a file: if it is a terminal, readline owns it,
+// and draining it here would eat the REPL's own keyboard.
+//
+// This is what makes the primitive testable without a browser —
+//   printf 'yes\nno\n' | bml ask.ml
+// runs the same code path the laptop drives interactively.
+let STDIN = [];
+// Only when we are running FILES and will not go on to the prompt. `isTTY` is
+// not the test on its own: piping a session into the REPL is also not a TTY,
+// and draining stdin here ate the REPL's own input and took out 13 tests at
+// once. If the prompt is coming, the prompt owns the keyboard.
+if (files.length && !forceRepl && !process.stdin.isTTY) {
+  try {
+    const raw = fs.readFileSync(0, 'utf8');
+    STDIN = raw.length ? raw.replace(/\n$/, '').split('\n') : [];
+  } catch { STDIN = []; }
+}
+
+// One context for the whole session. The interpreter advances `stdinPos` on it
+// in place as lines are read, so this object has to outlive the line: a fresh
+// literal per call would rewind the queue and hand every readLine the same
+// answer.
+const CTX = { fuel: REPL_FUEL, stdin: STDIN, stdinPos: 0 };
 
 let failed = false;
 for (const f of files) { if (!runFile(f)) failed = true; }

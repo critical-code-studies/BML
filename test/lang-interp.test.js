@@ -1737,7 +1737,7 @@ test('records unify BY LABEL, not by position', () => {
   assert.equal(bml.typeReport('pair "s"'), '{a : string, b : string}');
 });
 
-// ---- the eight language gaps, one test each (docs/language-gaps-plan.md) ----
+// ---- the eight language gaps, one test each (docs/archive/language-gaps-plan.md) ----
 
 test('G1: control and unicode string escapes', () => {
   // `\^A` is the control character whose code is the letter's minus 64; `\uXXXX`
@@ -2005,7 +2005,7 @@ test('an int that leaves the range raises Overflow', () => {
 });
 
 test('evalNode stays slim, so a recursion gets a deep enough stack', () => {
-  // docs/deep-recursion-plan.md. V8's INTERPRETER sizes a frame for every local
+  // docs/archive/deep-recursion-plan.md. V8's INTERPRETER sizes a frame for every local
   // a function declares, not for the ones the branch taken uses. evalNode was
   // one switch holding 92, so every ML call reserved room for StructApply's
   // twelve, and `List.tabulate (1000, f)` ran out of host stack at 505. Moving
@@ -2036,7 +2036,7 @@ test('a thousand-element list can be built', () => {
 });
 
 test('the Basis: the members Phase 1 filled in', () => {
-  // docs/basis-plan.md. Every one called once against its answer — the
+  // docs/archive/basis-plan.md. Every one called once against its answer — the
   // checklist compares answers too, but it is a list of FEATURES and this is a
   // list of members, so it belongs here.
   const bml = createInterpreter({ typecheck: 'strict', clock: () => 0 });
@@ -2400,7 +2400,7 @@ test('List, Array and Vector keep their own members', () => {
 //
 // This is NOT the word type. `0wxFFFFFFFF + 0w1` bare is still int arithmetic,
 // because a word literal lexes to an int and nothing downstream can tell them
-// apart. See docs/word-type-plan.md for why that is being left alone and said
+// apart. See docs/archive/word-type-plan.md for why that is being left alone and said
 // out loud rather than built.
 test('Word.+ - and * wrap at the word size', () => {
   const bml = createInterpreter({ typecheck: 'off' });
