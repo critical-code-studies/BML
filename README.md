@@ -1,6 +1,6 @@
 # BML
 
-**Version 0.43.0** · GPL-3.0-or-later · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
+**Version 0.44.0** · GPL-3.0-or-later · [critical-code-studies/BML](https://github.com/critical-code-studies/BML)
 
 **BML created by David M. Berry, University of Sussex, 2026.**
 Based on Standard ML developed by Robin Milner, Mads Tofte, and Robert Harper.
@@ -30,7 +30,7 @@ a question the game this grew inside asks rather than answers.
 
 ```
 $ node bin/bml.js
-BML 0.43.0, a 2026 Standard ML
+BML 0.44.0, a 2026 Standard ML
 Created by David M. Berry, University of Sussex, 2026.
 Based on Standard ML developed by Robin Milner, Mads Tofte and Robert Harper.
 

@@ -27,7 +27,7 @@
 import { RonmlError, RonmlRaise, RonmlNeedInput } from './errors.js';
 import { nameKey, setNameFold } from './names.js';
 import { tokenize } from './lex.js';
-import { parse, joinProgramLines } from './parse.js';
+import { parse, joinProgramLines, splitProgram } from './parse.js';
 import { evalNode, formatValue, combineOutput, beginRun, setOut, setIn, inRead } from './eval.js';
 import { typeOf, remember } from './types.js';
 import { diagnose, suggestName } from './diag.js';
@@ -516,7 +516,16 @@ export function createInterpreter(opts = {}) {
     // `exception Size` is the same name as `size` once case is folded, so a
     // host that folds does not get it. Everything else is shared.
     const src = opts.names === 'fold' ? PRELUDE : `${PRELUDE}\n${PRELUDE_EXACT}`;
-    for (const line of joinProgramLines(src)) {
+    // Cut by the PARSER, the same as a file at a terminal, so the prelude is
+    // read the one way whole files are read and the layout heuristic is left to
+    // the prompt where it belongs. `splitProgram` throws only if the whole
+    // library fails to parse, which would be a bug in the library rather than
+    // anything a player did; the line reading is kept as the fallback so a
+    // broken prelude still loads what it can and a test can see the rest.
+    let lines;
+    try { lines = splitProgram(src).map((d) => d.text); }
+    catch { lines = joinProgramLines(src); }
+    for (const line of lines) {
       try {
         run(line, hostCtx);
       } catch { /* see above */ }

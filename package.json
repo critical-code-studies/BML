@@ -1,6 +1,6 @@
 {
   "name": "bml-lang",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "A 2026 Standard ML, in plain JavaScript",
   "type": "module",
   "license": "GPL-3.0-or-later",
