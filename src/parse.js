@@ -118,7 +118,7 @@ const SYM_BIN = {
   div: 'DIV', mod: 'MOD',
 };
 
-export function parse(toks, fixityIn) {
+export function parse(toks, fixityIn, opts) {
   let p = 0;
   try {
   // The parser's own copy: `infix` inside a block must not leak out to the
@@ -1689,6 +1689,32 @@ export function parse(toks, fixityIn) {
     return parseExpr();
   }
 
+  // A WHOLE FILE, as a run of declarations. Standard ML is not layout
+  // sensitive: a declaration ends where the next one begins, and the parser is
+  // the only thing that knows where that is. Everything else here reconstructs
+  // the boundaries from indentation, which is a guess, and a guess that fails
+  // on a file indented from top to bottom — an opener copied out of a page's
+  // source comment arrives exactly like that, parses as one line, and does
+  // nothing at all.
+  //
+  // This returns SPANS rather than an AST, so the caller can hand each
+  // declaration's own text to the pipeline it already has. The evaluator, the
+  // per-declaration printing and the error positions all stay as they are; only
+  // the question of where one declaration stops is answered properly.
+  if (opts && opts.spans) {
+    const spans = [];
+    while (peek().t === 'SEMI') p++;              // a leading or stray separator
+    while (peek().t !== 'EOF') {
+      const start = p;
+      const line = peek().line || 1;
+      parseTop();
+      if (peek().t === 'COLON') { p++; parseTypeExpr(); }
+      spans.push({ start, end: p, line });
+      while (peek().t === 'SEMI') p++;      // `;` separates AND terminates
+    }
+    return spans;
+  }
+
   let expr = parseTop();
   // A trailing annotation on the whole line. `let val x = 1 in x end : int` is
   // read at the top by the DECLARATION parser, which returns before parseExpr
@@ -1739,14 +1765,78 @@ export function parseLine(source, fixity) {
   return parse(tokenize(String(source)), fixity);
 }
 
+// A FILE, SPLIT WHERE THE PARSER SAYS ONE DECLARATION ENDS.
+//
+// Same shape as `joinProgram` — `[{ text, line }]` — so a caller can swap one
+// for the other, and the same shape is the point: the evaluator, the printing
+// and the error positions all stay where they are. What changes is who decides
+// where a declaration stops. `joinProgram` reads the layout and guesses;
+// Standard ML has no layout rule, so the guess is wrong for any file that does
+// not happen to be written the way the guess expects. This asks the parser,
+// which is the only thing that actually knows.
+//
+// Comments and blank lines never arise: the lexer has skipped them, nested
+// correctly, since before any of this. Indentation is not consulted at all.
+//
+// Throws what the parser throws. A file that does not parse has no
+// declarations to split, and the caller reports that as it would any other
+// parse error.
+export function splitProgram(text, fixity) {
+  const src = String(text);
+  const toks = tokenize(src);
+  const spans = parse(toks, fixity, { spans: true });
+  return spans.map(({ start, end, line }) => {
+    const from = toks[start] ? toks[start].pos : 0;
+    // Up to the START of the token after this declaration, so trailing
+    // whitespace and any comment between the two go with neither.
+    const to = toks[end] && toks[end].pos != null ? toks[end].pos : src.length;
+    return { text: src.slice(from, to).trim(), line };
+  }).filter((d) => d.text);
+}
+
 // Split a program file into the logical lines the parser expects, KEEPING the
 // physical line each one started on, so an error can say where.
 export function joinProgram(text) {
   const out = [];
   const lines = String(text).split('\n');
+  // COMMENT DEPTH ACROSS LINES. `(* … *)` was stripped one line at a time, so a
+  // comment written down the page left its first line standing as a logical
+  // line, and every indented line after it — the rest of the comment AND the
+  // declarations below — was glued onto it as a continuation. The file became
+  // ONE line beginning with `(*`, which `runMlFile` skips, so `ml prog.ml`
+  // printed nothing, defined nothing, and reported no error. A program with a
+  // header comment is most programs.
+  //
+  // Counted rather than matched, because Standard ML nests comments.
+  // A STRING IS NOT A COMMENT. `val a = "(*"` is an ordinary declaration whose
+  // text happens to contain the marker; counting it would open a comment that
+  // never closes and silently eat the rest of the file. The single-line strip
+  // this replaced got that right by accident — it could only ever lose the rest
+  // of ONE line — so the depth counter has to earn it back deliberately.
+  //
+  // Only at depth 0. Inside a comment the Definition counts `(*` and `*)`
+  // whatever they sit in, quotes included.
+  let depth = 0;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    let line = raw.replace(/\(\*.*?\*\)/g, '').replace(/\s+$/, '');
+    let kept = '';
+    for (let j = 0; j < raw.length; j++) {
+      if (depth === 0 && raw[j] === '"') {
+        // Copy the literal whole, honouring the backslash escape so that a
+        // quote inside it does not end it early.
+        kept += raw[j++];
+        while (j < raw.length && raw[j] !== '"') {
+          if (raw[j] === '\\' && j + 1 < raw.length) kept += raw[j++];
+          kept += raw[j++];
+        }
+        if (j < raw.length) kept += raw[j];
+        continue;
+      }
+      if (raw.startsWith('(*', j)) { depth++; j++; continue; }
+      if (depth > 0 && raw.startsWith('*)', j)) { depth--; j++; continue; }
+      if (depth === 0) kept += raw[j];
+    }
+    let line = kept.replace(/\s+$/, '');
     if (!line.trim()) continue;
     if (/^>/.test(line)) continue;
     line = line.replace(/^(\s*)-\s+(?=[A-Za-z(\[])/, '$1');

@@ -31,7 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  createInterpreter, smlEcho, joinProgram, needsMoreInput, continuesPrevious,
+  createInterpreter, smlEcho, joinProgram, splitProgram, needsMoreInput, continuesPrevious,
   readlineCompleter, setReadFile, setWriteFile, BML_NAME, BML_VERSION, BML_CREDIT,
 } from '../src/index.js';
 
@@ -316,9 +316,19 @@ function runFile(path) {
   let text;
   try { text = fs.readFileSync(path, 'utf8'); }
   catch { console.log(`ERR: cannot read ${path}`); return false; }
-  // A file is a run of declarations, not one expression: joinProgram puts each
-  // back together across the lines it was written on.
-  for (const l of joinProgram(text)) {
+  // A file is a run of declarations, not one expression, and where one ends is
+  // a question only the parser can answer — Standard ML has no layout rule, so
+  // reading the indentation is a guess that fails on a file indented from top
+  // to bottom. The game switched to the parser; this has to as well, or the
+  // same file runs in the browser and refuses at the command line, which is the
+  // disagreement that has cost this project several days.
+  //
+  // A file that will not parse falls back to the line reading, which can point
+  // at one line and say what is wrong with it.
+  let decls;
+  try { decls = splitProgram(text); }
+  catch { decls = joinProgram(text); }
+  for (const l of decls) {
     const one = String(l && l.text !== undefined ? l.text : l);
     if (step(one) === false) { console.log(`ERR: stopped in ${path}`); return false; }
   }

@@ -89,7 +89,35 @@ export function tokenize(src) {
   const toks = [];
   let i = 0;
   const n = src.length;
+  // WHERE EACH TOKEN CAME FROM. `splitProgram` reads a whole file as a run of
+  // declarations, and an error in the ninth of them has to say which line it
+  // was on. Nothing else needs this, and no branch below has to know about it:
+  // the position of the character the iteration STARTED at is stamped onto
+  // whatever that iteration pushed, done at the top of the next turn so that
+  // the forty-odd `continue`s cost nothing.
+  //
+  // The line is counted with a pointer that only moves forward, positions being
+  // handed out in order, so the whole file costs one pass rather than a scan
+  // per token.
+  let stampFrom = 0;
+  let tokenStart = 0;
+  let scanned = 0;
+  let atLine = 1;
+  const lineAt = (pos) => {
+    while (scanned < pos) { if (src[scanned] === '\n') atLine++; scanned++; }
+    return atLine;
+  };
+  const stamp = () => {
+    if (stampFrom >= toks.length) return;
+    const line = lineAt(tokenStart);
+    for (; stampFrom < toks.length; stampFrom++) {
+      toks[stampFrom].pos = tokenStart;
+      toks[stampFrom].line = line;
+    }
+  };
   while (i < n) {
+    stamp();
+    tokenStart = i;
     const c = src[i];
     if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
     // COMMENTS NEST, which the Definition says in §2.3 and this did not do: it
@@ -275,6 +303,9 @@ export function tokenize(src) {
     }
     throw new RonmlError(`unexpected character '${c}'`);
   }
+  stamp();                       // whatever the last turn pushed
+  tokenStart = n;
   toks.push({ t: 'EOF' });
+  stamp();
   return toks;
 }

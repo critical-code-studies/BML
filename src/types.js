@@ -1149,9 +1149,23 @@ export function setHostKnowsName(fn) { HOST_KNOWS_NAME = fn; }
 
 let WARNINGS = [];
 
-export function typeOf(ast, session = {}) {
+// `opts.nameKey` is the host's name-folding function, when it has one. A host
+// that folds case reads `readFile` as `readfile` all the way through, so the
+// AST arrives here carrying the folded spelling while `baseEnv` files its
+// primitives under the spelling they are written in. The two never met:
+// `readFile`, `readLine`, `writeFile` and `fileExists` all reported `'a` in the
+// game and their true types at the command line, which is the same disagreement
+// about what a name is that hid `readLine` from the evaluator until #103. The
+// runtime table was folded then; the TYPE table was not, and nothing looked.
+//
+// Only the primitives need it. Anything the session learned was remembered
+// under the folded name already, because it came off the same folded AST.
+export function typeOf(ast, session = {}, opts = {}) {
   WARNINGS = [];
-  const env = { ...baseEnv() };
+  const fold = typeof opts.nameKey === 'function' ? opts.nameKey : null;
+  const base = baseEnv();
+  const env = {};
+  for (const k of Object.keys(base)) env[fold ? fold(k) : k] = base[k];
   const cons = {};
   const reg = session.__types || {};
   for (const k of Object.keys(reg)) env[k] = reg[k];

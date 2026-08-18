@@ -263,7 +263,7 @@ export function createInterpreter(opts = {}) {
       // two arguments, which is ill-typed, while the evaluator saw the operator
       // the user had just declared. Same text, two grammars.
       const ast = parse(tokenize(String(source)), session.__fixity || undefined);
-      const r = typeOf(ast, envTip());
+      const r = typeOf(ast, envTip(), { nameKey });
       if (!r.ok) return r.error ? `TYPE: ${r.error}` : null;
       remember(ast, envTip(), r.t);
       // A warning rides alongside the type rather than replacing it: the line is
