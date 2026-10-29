@@ -307,3 +307,7 @@ under any licence; the conformance harness fetches it.
 
 At the head of this file. BML runs inside
 [NostOS](https://github.com/dmberry/nostos) under the in-fiction name AI-ML.
+
+## Citation
+
+<a href="https://doi.org/10.5281/zenodo.23767888"><img src="https://zenodo.org/badge/1314291128.svg" alt="DOI"></a>
