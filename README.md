@@ -314,4 +314,4 @@ At the head of this file. BML runs inside
 
 DOI: [10.5281/zenodo.23767888](https://doi.org/10.5281/zenodo.23767888)
 
-Berry, D. M. (2026) *BML: a 2026 Standard ML in plain JavaScript* [Software]. Zenodo. Available at: https://doi.org/10.5281/zenodo.23767888
+Berry, D. M. (2026) *BML: an experimental 2026 Standard ML in JavaScript* [Software]. Zenodo. Available at: https://doi.org/10.5281/zenodo.23767888

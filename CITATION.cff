@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use BML in your work, please cite it as below."
-title: "BML: a 2026 Standard ML in plain JavaScript"
+title: "BML: an experimental 2026 Standard ML in JavaScript"
 abstract: >-
   BML is a 2026 Standard ML implemented in plain JavaScript: lexer, parser,
   Hindley-Milner type inference and Basis Library, with no build step and no
