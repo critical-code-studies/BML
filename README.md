@@ -311,3 +311,5 @@ At the head of this file. BML runs inside
 ## Citation
 
 <a href="https://doi.org/10.5281/zenodo.23767888"><img src="https://zenodo.org/badge/1314291128.svg" alt="DOI"></a>
+
+DOI: [10.5281/zenodo.23767888](https://doi.org/10.5281/zenodo.23767888)

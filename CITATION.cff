@@ -14,6 +14,7 @@ authors:
     orcid: "https://orcid.org/0000-0002-7737-5586"
 repository-code: "https://github.com/critical-code-studies/BML"
 url: "https://critical-code-studies.github.io/BML/"
+doi: 10.5281/zenodo.23767888
 license: GPL-3.0-or-later
 version: "0.44.0"
 date-released: 2026-10-29
