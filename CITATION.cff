@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use BML in your work, please cite it as below."
 title: "BML: an experimental 2026 Standard ML in JavaScript"
 abstract: >-
-  BML is a 2026 Standard ML implemented in plain JavaScript: lexer, parser,
+  BML is a 2026 Standard ML implemented in JavaScript: lexer, parser,
   Hindley-Milner type inference and Basis Library, with no build step and no
   dependencies. Based on Standard ML as developed by Robin Milner, Mads Tofte and
   Robert Harper.
@@ -16,7 +16,7 @@ repository-code: "https://github.com/critical-code-studies/BML"
 url: "https://critical-code-studies.github.io/BML/"
 doi: 10.5281/zenodo.23767888
 license: GPL-3.0-or-later
-version: "0.44.0"
+version: "0.44.1"
 date-released: 2026-10-29
 keywords:
   - Standard ML

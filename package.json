@@ -1,7 +1,7 @@
 {
   "name": "bml-lang",
-  "version": "0.44.0",
-  "description": "A 2026 Standard ML, in plain JavaScript",
+  "version": "0.44.1",
+  "description": "A 2026 Standard ML, in JavaScript",
   "type": "module",
   "license": "GPL-3.0-or-later",
   "author": "David M. Berry",
